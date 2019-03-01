@@ -1,0 +1,22 @@
+version: 2.1
+jobs:
+  build:
+    docker:
+      - image: "circleci/golang:1.12"
+        environment:
+          GO111MODULE: "on"
+    working_directory: /go/src/github.com/marten-seemann/qpack
+    steps:
+      - checkout
+      - run:
+          name: "Setup build environment"
+          command: |
+            git submodule update --init --recursive
+            go get github.com/onsi/ginkgo/ginkgo
+            go get github.com/onsi/gomega
+      - run:
+          name: "Build infos"
+          command: go version
+      - run:
+          name: "Run integration tests"
+          command: ginkgo -race -v -randomizeAllSpecs -trace integrationtests

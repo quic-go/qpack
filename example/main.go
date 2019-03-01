@@ -17,12 +17,14 @@ func main() {
 	}
 
 	dec := qpack.NewDecoder(emitFunc)
-	in, err := decodeInput(file)
-	if err != nil {
-		panic(err)
+	for {
+		in, err := decodeInput(file)
+		if err != nil {
+			panic(err)
+		}
+		fmt.Printf("\nRequest on stream %d:\n", in.streamID)
+		dec.Write(in.data)
 	}
-	fmt.Printf("Request on stream %d:\n", in.streamID)
-	dec.Write(in.data)
 }
 
 func emitFunc(hf qpack.HeaderField) {

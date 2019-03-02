@@ -18,5 +18,8 @@ jobs:
           name: "Build infos"
           command: go version
       - run:
+          name: "Run unit tests"
+          command: ginkgo -race -v -randomizeAllSpecs
+      - run:
           name: "Run integration tests"
           command: ginkgo -race -v -randomizeAllSpecs -trace integrationtests

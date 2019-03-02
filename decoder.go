@@ -24,6 +24,8 @@ func (e invalidIndexError) Error() string {
 	return fmt.Sprintf("invalid indexed representation index %d", int(e))
 }
 
+var errNoDynamicTable = decodingError{errors.New("no dynamic table")}
+
 // A Decoder is the decoding context for incremental processing of
 // header blocks.
 type Decoder struct {
@@ -44,7 +46,7 @@ func (d *Decoder) Write(p []byte) (int, error) {
 	d.buf = p
 
 	if err := d.decode(); err != nil {
-		panic(err)
+		return 0, err
 	}
 	return len(p), nil
 }
@@ -87,7 +89,7 @@ func (d *Decoder) decode() error {
 
 func (d *Decoder) parseIndexedHeaderField() error {
 	if d.buf[0]&0x40 == 0 {
-		return errors.New("no dymanic table")
+		return errNoDynamicTable
 	}
 	index, rest, err := readVarInt(6, d.buf)
 	if err != nil {
@@ -105,7 +107,7 @@ func (d *Decoder) parseIndexedHeaderField() error {
 func (d *Decoder) parseLiteralHeaderField() error {
 	b := d.buf
 	if b[0]&0x20 > 0 || b[0]&0x10 == 0 {
-		return errors.New("no dynamic table")
+		return errNoDynamicTable
 	}
 	index, rest, err := readVarInt(4, d.buf)
 	if err != nil {

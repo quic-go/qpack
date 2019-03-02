@@ -28,11 +28,50 @@ var _ = Describe("Self Tests", func() {
 		})
 	})
 
-	It("encodes and decodes a single header", func() {
+	It("encodes and decodes a single header field", func() {
 		hf := qpack.HeaderField{Name: "foo", Value: "bar"}
 		Expect(encoder.WriteField(hf)).To(Succeed())
 		_, err := decoder.Write(output.Bytes())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(headerFields).To(Equal([]qpack.HeaderField{hf}))
+	})
+
+	It("encodes and decodes multiple header fields", func() {
+		hfs := []qpack.HeaderField{
+			{Name: "foo", Value: "bar"},
+			{Name: "lorem", Value: "ipsum"},
+			{Name: "name", Value: "value"},
+		}
+		for _, hf := range hfs {
+			Expect(encoder.WriteField(hf)).To(Succeed())
+		}
+		_, err := decoder.Write(output.Bytes())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(headerFields).To(Equal(hfs))
+	})
+
+	It("encodes and decodes multiple requests", func() {
+		hfs1 := []qpack.HeaderField{{Name: "foo", Value: "bar"}}
+		hfs2 := []qpack.HeaderField{
+			{Name: "lorem", Value: "ipsum"},
+			{Name: "name", Value: "value"},
+		}
+		for _, hf := range hfs1 {
+			Expect(encoder.WriteField(hf)).To(Succeed())
+		}
+		req1 := append([]byte{}, output.Bytes()...)
+		output.Reset()
+		for _, hf := range hfs2 {
+			Expect(encoder.WriteField(hf)).To(Succeed())
+		}
+		req2 := append([]byte{}, output.Bytes()...)
+
+		_, err := decoder.Write(req1)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(headerFields).To(Equal(hfs1))
+		headerFields = nil
+		_, err = decoder.Write(req2)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(headerFields).To(Equal(hfs2))
 	})
 })

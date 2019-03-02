@@ -6,6 +6,8 @@ import (
 
 // An Encoder performs QPACK encoding.
 type Encoder struct {
+	wrotePrefix bool
+
 	w   io.Writer
 	buf []byte
 }
@@ -21,12 +23,22 @@ func NewEncoder(w io.Writer) *Encoder {
 // if necessary. If produced, it is done before encoding f.
 func (e *Encoder) WriteField(f HeaderField) error {
 	// write the Header Block Prefix
-	e.buf = appendVarInt(e.buf, 8, 0)
-	e.buf = appendVarInt(e.buf, 7, 0)
+	if !e.wrotePrefix {
+		e.buf = appendVarInt(e.buf, 8, 0)
+		e.buf = appendVarInt(e.buf, 7, 0)
+		e.wrotePrefix = true
+	}
 
 	e.writeLiteralFieldWithoutNameReference(f)
 	e.w.Write(e.buf)
 	e.buf = e.buf[:0]
+	return nil
+}
+
+// Close declares that the encoding is complete and resets the Encoder
+// to be reused again for a new header block.
+func (e *Encoder) Close() error {
+	e.wrotePrefix = false
 	return nil
 }
 

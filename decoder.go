@@ -1,6 +1,7 @@
 package qpack
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 
@@ -26,12 +27,28 @@ func (e invalidIndexError) Error() string {
 
 var errNoDynamicTable = decodingError{errors.New("no dynamic table")}
 
+// errNeedMore is an internal sentinel error value that means the
+// buffer is truncated and we need to read more data before we can
+// continue parsing.
+var errNeedMore = errors.New("need more data")
+
 // A Decoder is the decoding context for incremental processing of
 // header blocks.
 type Decoder struct {
 	emitFunc func(f HeaderField)
 
-	buf []byte
+	readRequiredInsertCount bool
+	readDeltaBase           bool
+
+	// buf is the unparsed buffer. It's only written to
+	// saveBuf if it was truncated in the middle of a header
+	// block. Because it's usually not owned, we can only
+	// process it under Write.
+	buf []byte // not owned; only valid during Write
+
+	// saveBuf is previous data passed to Write which we weren't able
+	// to fully parse before. Unlike buf, we own this data.
+	saveBuf bytes.Buffer
 }
 
 // NewDecoder returns a new decoder
@@ -42,32 +59,69 @@ func NewDecoder(emitFunc func(f HeaderField)) *Decoder {
 }
 
 func (d *Decoder) Write(p []byte) (int, error) {
-	// TODO: handle incomplete writes
-	d.buf = p
+	if len(p) == 0 {
+		return 0, nil
+	}
+
+	// Only copy the data if we have to. Optimistically assume
+	// that p will contain a complete header block.
+	if d.saveBuf.Len() == 0 {
+		d.buf = p
+	} else {
+		d.saveBuf.Write(p)
+		d.buf = d.saveBuf.Bytes()
+		d.saveBuf.Reset()
+	}
 
 	if err := d.decode(); err != nil {
-		return 0, err
+		if err != errNeedMore {
+			return 0, err
+		}
+		// TODO: limit the size of the buffer
+		d.saveBuf.Write(d.buf)
 	}
 	return len(p), nil
 }
 
+// Close declares that the decoding is complete and resets the Decoder
+// to be reused again for a new header block. If there is any remaining
+// data in the decoder's buffer, Close returns an error.
+func (d *Decoder) Close() error {
+	if d.saveBuf.Len() > 0 {
+		d.saveBuf.Reset()
+		return decodingError{errors.New("truncated headers")}
+	}
+	d.readRequiredInsertCount = false
+	d.readDeltaBase = false
+	return nil
+}
+
 func (d *Decoder) decode() error {
-	requiredInsertCount, rest, err := readVarInt(8, d.buf)
-	if err != nil {
-		return err
+	if !d.readRequiredInsertCount {
+		requiredInsertCount, rest, err := readVarInt(8, d.buf)
+		if err != nil {
+			return err
+		}
+		d.readRequiredInsertCount = true
+		if requiredInsertCount != 0 {
+			return decodingError{errors.New("expected Required Insert Count to be zero")}
+		}
+		d.buf = rest
 	}
-	if requiredInsertCount != 0 {
-		return decodingError{errors.New("expected Required Insert Count to be zero")}
+	if !d.readDeltaBase {
+		base, rest, err := readVarInt(7, d.buf)
+		if err != nil {
+			return err
+		}
+		d.readDeltaBase = true
+		if base != 0 {
+			return decodingError{errors.New("expected Base to be zero")}
+		}
+		d.buf = rest
 	}
-	d.buf = rest
-	base, rest, err := readVarInt(7, d.buf)
-	if err != nil {
-		return err
+	if len(d.buf) == 0 {
+		return errNeedMore
 	}
-	if base != 0 {
-		return decodingError{errors.New("expected Base to be zero")}
-	}
-	d.buf = rest
 
 	for len(d.buf) > 0 {
 		b := d.buf[0]
@@ -80,7 +134,7 @@ func (d *Decoder) decode() error {
 		case b&0xe0 == 0x20: // 001xxxxx
 			err = d.parseLiteralHeaderFieldWithoutNameReference()
 		default:
-			err = fmt.Errorf("unexpected type byte: %#x", d.buf[0])
+			err = fmt.Errorf("unexpected type byte: %#x", b)
 		}
 		if err != nil {
 			return err
@@ -90,91 +144,90 @@ func (d *Decoder) decode() error {
 }
 
 func (d *Decoder) parseIndexedHeaderField() error {
-	if d.buf[0]&0x40 == 0 {
+	buf := d.buf
+	if buf[0]&0x40 == 0 {
 		return errNoDynamicTable
 	}
-	index, rest, err := readVarInt(6, d.buf)
+	index, buf, err := readVarInt(6, buf)
 	if err != nil {
 		return err
 	}
-	d.buf = rest
 	hf, ok := d.at(index)
 	if !ok {
 		return decodingError{invalidIndexError(index)}
 	}
 	d.emitFunc(hf)
+	d.buf = buf
 	return nil
 }
 
 func (d *Decoder) parseLiteralHeaderField() error {
-	if d.buf[0]&0x20 > 0 || d.buf[0]&0x10 == 0 {
+	buf := d.buf
+	if buf[0]&0x20 > 0 || buf[0]&0x10 == 0 {
 		return errNoDynamicTable
 	}
-	index, rest, err := readVarInt(4, d.buf)
+	index, buf, err := readVarInt(4, buf)
 	if err != nil {
 		return err
 	}
-	d.buf = rest
 	hf, ok := d.at(index)
 	if !ok {
 		return decodingError{invalidIndexError(index)}
 	}
-	usesHuffman := d.buf[0]&0x80 > 0
-	l, rest, err := readVarInt(7, d.buf)
-	if err != nil {
-		return err
+	if len(buf) == 0 {
+		return errNeedMore
 	}
-	d.buf = rest
-	val, err := d.parseString(l, usesHuffman)
+	usesHuffman := buf[0]&0x80 > 0
+	val, buf, err := d.readString(buf, 7, usesHuffman)
 	if err != nil {
 		return err
 	}
 	hf.Value = val
 	d.emitFunc(hf)
+	d.buf = buf
 	return nil
 }
 
 func (d *Decoder) parseLiteralHeaderFieldWithoutNameReference() error {
-	usesHuffmanForName := d.buf[0]&0x8 > 0
-	nameLen, rest, err := readVarInt(3, d.buf)
+	buf := d.buf
+	usesHuffmanForName := buf[0]&0x8 > 0
+	name, buf, err := d.readString(buf, 3, usesHuffmanForName)
 	if err != nil {
 		return err
 	}
-	d.buf = rest
-	name, err := d.parseString(nameLen, usesHuffmanForName)
-	if err != nil {
-		return err
+	if len(buf) == 0 {
+		return errNeedMore
 	}
-	usesHuffmanForVal := d.buf[0]&0x80 > 0
-	valLen, rest, err := readVarInt(7, d.buf)
-	if err != nil {
-		return err
-	}
-	d.buf = rest
-	val, err := d.parseString(valLen, usesHuffmanForVal)
+	usesHuffmanForVal := buf[0]&0x80 > 0
+	val, buf, err := d.readString(buf, 7, usesHuffmanForVal)
 	if err != nil {
 		return err
 	}
 	d.emitFunc(HeaderField{Name: name, Value: val})
+	d.buf = buf
 	return nil
 }
 
-func (d *Decoder) parseString(l uint64, usesHuffman bool) (string, error) {
-	if uint64(len(d.buf)) < l {
-		return "", errors.New("too little data")
+func (d *Decoder) readString(buf []byte, n uint8, usesHuffman bool) (string, []byte, error) {
+	l, buf, err := readVarInt(n, buf)
+	if err != nil {
+		return "", nil, err
+	}
+	if uint64(len(buf)) < l {
+		return "", nil, errNeedMore
 	}
 	var val string
 	if usesHuffman {
 		var err error
-		val, err = hpack.HuffmanDecodeToString(d.buf[:l])
+		val, err = hpack.HuffmanDecodeToString(buf[:l])
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 	} else {
-		val = string(d.buf[:l])
+		val = string(buf[:l])
 	}
-	d.buf = d.buf[l:]
-	return val, nil
+	buf = buf[l:]
+	return val, buf, nil
 }
 
 func (d *Decoder) at(i uint64) (hf HeaderField, ok bool) {

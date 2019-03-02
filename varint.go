@@ -4,10 +4,6 @@ package qpack
 
 import "errors"
 
-// errNeedMore is an internal sentinel error value that means the
-// buffer is truncated and we need to read more data before we can
-// continue parsing.
-var errNeedMore = errors.New("need more data")
 var errVarintOverflow = errors.New("varint integer overflow")
 
 // appendVarInt appends i, as encoded in variable integer form using n

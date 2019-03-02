@@ -17,5 +17,5 @@ git submodule update --init --recursive
 
 Then run the tests:
 ```bash
-ginkgo integrationtests
+ginkgo -r integrationtests
 ```

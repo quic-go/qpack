@@ -1,4 +1,4 @@
-package integrationtests
+package interop
 
 import (
 	"bufio"
@@ -13,9 +13,9 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-func TestIntegrationtests(t *testing.T) {
+func TestInterop(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Integration Tests Suite")
+	RunSpecs(t, "Interop Suite")
 }
 
 type request struct {

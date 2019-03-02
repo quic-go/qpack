@@ -22,7 +22,7 @@ jobs:
           command: ginkgo -race -cover -v -randomizeAllSpecs
       - run:
           name: "Run integration tests"
-          command: ginkgo -race -v -randomizeAllSpecs -trace integrationtests
+          command: ginkgo -r -race -v -randomizeAllSpecs -trace integrationtests
       - run:
           name: "Upload coverage report to Codecov"
           when: on_success

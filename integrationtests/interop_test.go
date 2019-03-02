@@ -62,27 +62,31 @@ var _ = Describe("Interop", func() {
 	filenames := findFiles()
 	for i := range filenames {
 		path := filenames[i]
-		_, filename := filepath.Split(path)
+		fpath, filename := filepath.Split(path)
+		prettyPath := path[len(filepath.Dir(filepath.Dir(filepath.Dir(fpath))))+1:]
 
-		It(fmt.Sprintf("using %s", filename), func() {
+		It(fmt.Sprintf("using %s", prettyPath), func() {
 			qif, ok := qifs[strings.Split(filename, ".")[0]]
-			if !ok {
-				Skip("Skipping. No QIF file.")
-			}
+			Expect(ok).To(BeTrue())
 
 			file, err := os.Open(path)
 			var headers []qpack.HeaderField
 			decoder := qpack.NewDecoder(func(hf qpack.HeaderField) {
 				headers = append(headers, hf)
 			})
+			var numRequests, numHeaderFields int
+			Expect(qif.requests).ToNot(BeEmpty())
 			for _, req := range qif.requests {
 				Expect(err).ToNot(HaveOccurred())
 				_, data := parseInput(file)
 				_, err = decoder.Write(data)
 				Expect(err).ToNot(HaveOccurred())
 				Expect(headers).To(Equal(req.headers))
+				numRequests++
+				numHeaderFields += len(headers)
 				headers = nil
 			}
+			fmt.Fprintf(GinkgoWriter, "Decoded %d requests containing %d header fields.\n", len(qif.requests), numHeaderFields)
 		})
 	}
 })

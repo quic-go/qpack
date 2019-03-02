@@ -31,15 +31,10 @@ var qifs map[string]qif
 func readQIFs() {
 	qifDir := currentDir() + "/qifs/qifs"
 	Expect(qifDir).To(BeADirectory())
-	var processedFirst bool
 	filepath.Walk(qifDir, func(path string, info os.FileInfo, err error) error {
-		if processedFirst {
-			return nil
-		}
 		if info.IsDir() {
 			return nil
 		}
-		processedFirst = true
 		_, filename := filepath.Split(path)
 		ext := filepath.Ext(filename)
 		name := filename[:len(filename)-len(ext)]

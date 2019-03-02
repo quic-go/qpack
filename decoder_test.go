@@ -97,6 +97,20 @@ var _ = Describe("Decoder", func() {
 		Expect(err).To(MatchError(errNoDynamicTable))
 	})
 
+	It("parses a literal header field without name reference", func() {
+		data := appendVarInt(nil, 3, 3)
+		data[0] ^= 0x20
+		data = append(data, []byte("foo")...)
+		data2 := appendVarInt(nil, 7, 3)
+		data2 = append(data2, []byte("bar")...)
+		data = append(data, data2...)
+		_, err := decoder.Write(insertPrefix(data))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(headerFields).To(HaveLen(1))
+		Expect(headerFields[0].Name).To(Equal("foo"))
+		Expect(headerFields[0].Value).To(Equal("bar"))
+	})
+
 	It("rejects unknown type bytes", func() {
 		_, err := decoder.Write(insertPrefix([]byte{0x10}))
 		Expect(err).To(MatchError("unexpected type byte: 0x10"))

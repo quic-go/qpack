@@ -19,7 +19,13 @@ jobs:
           command: go version
       - run:
           name: "Run unit tests"
-          command: ginkgo -race -v -randomizeAllSpecs
+          command: ginkgo -race -cover -v -randomizeAllSpecs
       - run:
           name: "Run integration tests"
           command: ginkgo -race -v -randomizeAllSpecs -trace integrationtests
+      - run:
+          name: "Upload coverage report to Codecov"
+          when: on_success
+          command: |
+            cat `find . -name "*.coverprofile"` > coverage.txt
+            bash <(curl -s https://codecov.io/bash) -f coverage.txt

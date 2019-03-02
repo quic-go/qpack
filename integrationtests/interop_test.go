@@ -85,6 +85,7 @@ var _ = Describe("Interop", func() {
 				numRequests++
 				numHeaderFields += len(headers)
 				headers = nil
+				decoder.Close()
 			}
 			fmt.Fprintf(GinkgoWriter, "Decoded %d requests containing %d header fields.\n", len(qif.requests), numHeaderFields)
 		})

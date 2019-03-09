@@ -1,6 +1,8 @@
 package qpack
 
 import (
+	"bytes"
+
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	"golang.org/x/net/http2/hpack"
@@ -173,6 +175,52 @@ var _ = Describe("Decoder", func() {
 			data = insertPrefix(data)
 
 			doPartialWrites(data)
+		})
+	})
+
+	Context("using DecodeFull", func() {
+		It("decodes nothing", func() {
+			data, err := NewDecoder(nil).DecodeFull([]byte{})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(data).To(BeEmpty())
+		})
+
+		It("decodes multiple entries", func() {
+			buf := &bytes.Buffer{}
+			enc := NewEncoder(buf)
+			Expect(enc.WriteField(HeaderField{Name: "foo", Value: "bar"})).To(Succeed())
+			Expect(enc.WriteField(HeaderField{Name: "lorem", Value: "ipsum"})).To(Succeed())
+			data, err := NewDecoder(nil).DecodeFull(buf.Bytes())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(data).To(Equal([]HeaderField{
+				{Name: "foo", Value: "bar"},
+				{Name: "lorem", Value: "ipsum"},
+			}))
+		})
+
+		It("returns an error if the data is incomplete", func() {
+			buf := &bytes.Buffer{}
+			enc := NewEncoder(buf)
+			Expect(enc.WriteField(HeaderField{Name: "foo", Value: "bar"})).To(Succeed())
+			_, err := NewDecoder(nil).DecodeFull(buf.Bytes()[:buf.Len()-2])
+			Expect(err).To(MatchError("decoding error: truncated headers"))
+		})
+
+		It("restores the emitFunc afterwards", func() {
+			var emitFuncCalled bool
+			emitFunc := func(HeaderField) {
+				emitFuncCalled = true
+			}
+			decoder := NewDecoder(emitFunc)
+			buf := &bytes.Buffer{}
+			enc := NewEncoder(buf)
+			Expect(enc.WriteField(HeaderField{Name: "foo", Value: "bar"})).To(Succeed())
+			_, err := decoder.DecodeFull(buf.Bytes())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(emitFuncCalled).To(BeFalse())
+			_, err = decoder.Write(buf.Bytes())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(emitFuncCalled).To(BeTrue())
 		})
 	})
 })

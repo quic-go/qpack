@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"sync"
 
 	"golang.org/x/net/http2/hpack"
 )
@@ -35,6 +36,8 @@ var errNeedMore = errors.New("need more data")
 // A Decoder is the decoding context for incremental processing of
 // header blocks.
 type Decoder struct {
+	mutex sync.Mutex
+
 	emitFunc func(f HeaderField)
 
 	readRequiredInsertCount bool
@@ -63,6 +66,13 @@ func (d *Decoder) Write(p []byte) (int, error) {
 		return 0, nil
 	}
 
+	d.mutex.Lock()
+	n, err := d.writeLocked(p)
+	d.mutex.Unlock()
+	return n, err
+}
+
+func (d *Decoder) writeLocked(p []byte) (int, error) {
 	// Only copy the data if we have to. Optimistically assume
 	// that p will contain a complete header block.
 	if d.saveBuf.Len() == 0 {
@@ -81,6 +91,29 @@ func (d *Decoder) Write(p []byte) (int, error) {
 		d.saveBuf.Write(d.buf)
 	}
 	return len(p), nil
+}
+
+// DecodeFull decodes an entire block.
+func (d *Decoder) DecodeFull(p []byte) ([]HeaderField, error) {
+	if len(p) == 0 {
+		return []HeaderField{}, nil
+	}
+
+	d.mutex.Lock()
+	defer d.mutex.Unlock()
+
+	saveFunc := d.emitFunc
+	defer func() { d.emitFunc = saveFunc }()
+
+	var hf []HeaderField
+	d.emitFunc = func(f HeaderField) { hf = append(hf, f) }
+	if _, err := d.writeLocked(p); err != nil {
+		return nil, err
+	}
+	if err := d.Close(); err != nil {
+		return nil, err
+	}
+	return hf, nil
 }
 
 // Close declares that the decoding is complete and resets the Decoder

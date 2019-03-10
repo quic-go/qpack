@@ -1,12 +1,5 @@
 package qpack
 
-// A HeaderField is a name-value pair. Both the name and value are
-// treated as opaque sequences of octets.
-type HeaderField struct {
-	Name  string
-	Value string
-}
-
 var staticTableEntries = [...]HeaderField{
 	{Name: ":authority"},
 	{Name: ":path", Value: "/"},

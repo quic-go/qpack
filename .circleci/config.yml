@@ -1,10 +1,23 @@
 version: 2.1
-jobs:
-  build:
+
+executors:
+  # Whenever the Go version is updated here, .travis.yml and .promu.yml
+  # should also be updated.
+  golang:
     docker:
-      - image: "circleci/golang:1.12"
-        environment:
+    - image: circleci/golang:1.12
+      environment:
           GO111MODULE: "on"
+
+  fuzzit:
+    docker:
+      - image: fuzzitdev/golang:1.12.7-buster
+        environment:
+          GO111MODULE: "off"
+
+jobs:
+  test:
+    executor: golang
     working_directory: /go/src/github.com/marten-seemann/qpack
     steps:
       - checkout
@@ -29,3 +42,19 @@ jobs:
           command: |
             cat `find . -name "*.coverprofile"` > coverage.txt
             bash <(curl -s https://codecov.io/bash) -f coverage.txt
+  fuzzit:
+    executor: fuzzit
+    working_directory: /go/src/github.com/marten-seemann/qpack
+    steps:
+      - checkout
+      - setup_remote_docker
+      - run: go get ./...
+      - run: .circleci/fuzzit.sh
+
+workflows:
+  version: 2
+  qpack:
+    jobs:
+    - test
+    - fuzzit
+    

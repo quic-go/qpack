@@ -32,6 +32,9 @@ func readQIFs() {
 	qifDir := currentDir() + "/qifs/qifs"
 	Expect(qifDir).To(BeADirectory())
 	filepath.Walk(qifDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
 		if info.IsDir() {
 			return nil
 		}

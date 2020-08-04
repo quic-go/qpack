@@ -76,7 +76,7 @@ var _ = Describe("Decoder", func() {
 			Expect(err).To(MatchError(errNoDynamicTable))
 		})
 
-		It("errors when a non-existant static table entry is referenced", func() {
+		It("errors when a non-existent static table entry is referenced", func() {
 			data := appendVarInt(nil, 6, 10000)
 			data[0] ^= 0x80 | 0x40
 			_, err := decoder.Write(insertPrefix(data))

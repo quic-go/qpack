@@ -53,7 +53,7 @@ var _ = Describe("Encoder", func() {
 		Expect(data).To(BeEmpty())
 	})
 
-	It("encodes multipe fields", func() {
+	It("encodes multiple fields", func() {
 		hf1 := HeaderField{Name: "foobar", Value: "lorem ipsum"}
 		hf2 := HeaderField{Name: "raboof", Value: "dolor sit amet"}
 		Expect(encoder.WriteField(hf1)).To(Succeed())

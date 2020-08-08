@@ -12,23 +12,10 @@ import (
 )
 
 var _ = Describe("Self Tests", func() {
-	var (
-		// for the encoder
-		output  *bytes.Buffer
-		encoder *qpack.Encoder
-		// for the decoder
-		headerFields []qpack.HeaderField
-		decoder      *qpack.Decoder
-	)
-
-	BeforeEach(func() {
-		output = &bytes.Buffer{}
-		encoder = qpack.NewEncoder(output)
-		headerFields = nil
-		decoder = qpack.NewDecoder(func(hf qpack.HeaderField) {
-			headerFields = append(headerFields, hf)
-		})
-	})
+	getEncoder := func() (*qpack.Encoder, *bytes.Buffer) {
+		output := &bytes.Buffer{}
+		return qpack.NewEncoder(output), output
+	}
 
 	randomString := func(l int) string {
 		const charset = "abcdefghijklmnopqrstuvwxyz" +
@@ -45,8 +32,9 @@ var _ = Describe("Self Tests", func() {
 			Name:  randomString(15),
 			Value: randomString(15),
 		}
+		encoder, output := getEncoder()
 		Expect(encoder.WriteField(hf)).To(Succeed())
-		_, err := decoder.Write(output.Bytes())
+		headerFields, err := qpack.NewDecoder(nil).DecodeFull(output.Bytes())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(headerFields).To(Equal([]qpack.HeaderField{hf}))
 	})
@@ -57,10 +45,11 @@ var _ = Describe("Self Tests", func() {
 			{Name: "lorem", Value: "ipsum"},
 			{Name: randomString(15), Value: randomString(20)},
 		}
+		encoder, output := getEncoder()
 		for _, hf := range hfs {
 			Expect(encoder.WriteField(hf)).To(Succeed())
 		}
-		_, err := decoder.Write(output.Bytes())
+		headerFields, err := qpack.NewDecoder(nil).DecodeFull(output.Bytes())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(headerFields).To(Equal(hfs))
 	})
@@ -71,6 +60,7 @@ var _ = Describe("Self Tests", func() {
 			{Name: "lorem", Value: "ipsum"},
 			{Name: randomString(15), Value: randomString(20)},
 		}
+		encoder, output := getEncoder()
 		for _, hf := range hfs1 {
 			Expect(encoder.WriteField(hf)).To(Succeed())
 		}
@@ -81,6 +71,8 @@ var _ = Describe("Self Tests", func() {
 		}
 		req2 := append([]byte{}, output.Bytes()...)
 
+		var headerFields []qpack.HeaderField
+		decoder := qpack.NewDecoder(func(hf qpack.HeaderField) { headerFields = append(headerFields, hf) })
 		_, err := decoder.Write(req1)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(headerFields).To(Equal(hfs1))
@@ -105,10 +97,10 @@ var _ = Describe("Self Tests", func() {
 	}
 
 	check := func(encoded []byte, hf qpack.HeaderField) {
-		hfs, err := decoder.DecodeFull(encoded)
+		headerFields, err := qpack.NewDecoder(nil).DecodeFull(encoded)
 		ExpectWithOffset(1, err).ToNot(HaveOccurred())
-		Expect(hfs).To(HaveLen(1))
-		Expect(hfs[0]).To(Equal(hf))
+		ExpectWithOffset(1, headerFields).To(HaveLen(1))
+		ExpectWithOffset(1, headerFields[0]).To(Equal(hf))
 	}
 
 	// use an entry with a value, for example "set-cookie"
@@ -120,10 +112,11 @@ var _ = Describe("Self Tests", func() {
 				break
 			}
 		}
+		encoder, output := getEncoder()
 		Expect(encoder.WriteField(hf)).To(Succeed())
 		encodedLen := output.Len()
 		check(output.Bytes(), hf)
-		output.Reset()
+		encoder, output = getEncoder()
 		oldName := hf.Name
 		hf.Name = replaceRandomCharacter(hf.Name)
 		Expect(encoder.WriteField(hf)).To(Succeed())
@@ -144,10 +137,11 @@ var _ = Describe("Self Tests", func() {
 				break
 			}
 		}
+		encoder, output := getEncoder()
 		Expect(encoder.WriteField(hf)).To(Succeed())
 		encodedLen := output.Len()
 		check(output.Bytes(), hf)
-		output.Reset()
+		encoder, output = getEncoder()
 		oldName := hf.Name
 		hf.Name = replaceRandomCharacter(hf.Name)
 		Expect(encoder.WriteField(hf)).To(Succeed())
@@ -172,10 +166,11 @@ var _ = Describe("Self Tests", func() {
 				break
 			}
 		}
+		encoder, output := getEncoder()
 		Expect(encoder.WriteField(hf)).To(Succeed())
 		encodedLen := output.Len()
 		check(output.Bytes(), hf)
-		output.Reset()
+		encoder, output = getEncoder()
 		oldName := hf.Name
 		hf.Name = replaceRandomCharacter(hf.Name)
 		Expect(encoder.WriteField(hf)).To(Succeed())
@@ -196,10 +191,11 @@ var _ = Describe("Self Tests", func() {
 				break
 			}
 		}
+		encoder, output := getEncoder()
 		Expect(encoder.WriteField(hf)).To(Succeed())
 		encodedLen := output.Len()
 		check(output.Bytes(), hf)
-		output.Reset()
+		encoder, output = getEncoder()
 		oldValue := hf.Value
 		hf.Value = replaceRandomCharacter(hf.Value)
 		Expect(encoder.WriteField(hf)).To(Succeed())

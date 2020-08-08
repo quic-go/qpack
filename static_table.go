@@ -102,6 +102,13 @@ var staticTableEntries = [...]HeaderField{
 	{Name: "x-frame-options", Value: "sameorigin"},
 }
 
+// Only needed for tests.
+// use go:linkname to retrieve the static table.
+//nolint:deadcode,unused
+func getStaticTable() []HeaderField {
+	return staticTableEntries[:]
+}
+
 type indexAndValues struct {
 	idx    uint8
 	values map[string]uint8

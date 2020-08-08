@@ -26,8 +26,14 @@ jobs:
           name: "Run unit tests"
           command: ginkgo -race -cover -v -randomizeAllSpecs
       - run:
-          name: "Run integration tests"
-          command: ginkgo -r -race -v -randomizeAllSpecs -trace integrationtests
+          name: "Run interop tests"
+          command: ginkgo -race -v -randomizeAllSpecs -trace integrationtests/interop
+      - run:
+          name: "Run self integration tests"
+          command: 
+            for i in {1..25}; do
+              ginkgo -race -v -randomizeAllSpecs -trace integrationtests/self;
+            done
       - run:
           name: "Upload coverage report to Codecov"
           when: on_success

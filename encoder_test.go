@@ -41,6 +41,31 @@ var _ = Describe("Encoder", func() {
 		return data[len(hf.Value):]
 	}
 
+	// Reads one indexed field line representation from data and verifies it
+	// matches expected_hf.
+	// Returns the leftover bytes from data.
+	checkIndexedHeaderField := func(data []byte, expected_hf HeaderField) []byte {
+		Expect(data[0] >> 7).To(Equal(uint8(1))) // 1Txxxxxx
+		index, data, err := readVarInt(6, data)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(staticTableEntries[index]).To(Equal(expected_hf))
+		return data
+	}
+
+	checkHeaderFieldWithNameRef := func(data []byte, expected_hf HeaderField) []byte {
+		// read name reference
+		Expect(data[0] >> 6).To(Equal(uint8(1))) // 01NTxxxx
+		index, data, err := readVarInt(4, data)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(staticTableEntries[index].Name).To(Equal(expected_hf.Name))
+		// read literal value
+		valueLen, data, err := readVarInt(7, data)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(valueLen).To(BeEquivalentTo(len(expected_hf.Value)))
+		Expect(string(data[:len(expected_hf.Value)])).To(Equal(expected_hf.Value))
+		return data[len(expected_hf.Value):]
+	}
+
 	It("encodes a single field", func() {
 		hf := HeaderField{Name: "foobar", Value: "lorem ipsum"}
 		Expect(encoder.WriteField(hf)).To(Succeed())
@@ -65,6 +90,39 @@ var _ = Describe("Encoder", func() {
 
 		data = checkHeaderField(data, hf1)
 		data = checkHeaderField(data, hf2)
+		Expect(data).To(BeEmpty())
+	})
+
+	It("encodes all the fields of the static table", func() {
+		for _, hf := range staticTableEntries {
+			Expect(encoder.WriteField(hf)).To(Succeed())
+		}
+
+		data, requiredInsertCount, deltaBase := readPrefix(output.Bytes())
+		Expect(requiredInsertCount).To(BeZero())
+		Expect(deltaBase).To(BeZero())
+
+		for _, hf := range staticTableEntries {
+			data = checkIndexedHeaderField(data, hf)
+		}
+		Expect(data).To(BeEmpty())
+	})
+
+	It("encodes fields with name reference in the static table", func() {
+		hf1 := HeaderField{Name: ":status", Value: "666"}
+		hf2 := HeaderField{Name: "server", Value: "lorem ipsum"}
+		hf3 := HeaderField{Name: ":method", Value: ""}
+		Expect(encoder.WriteField(hf1)).To(Succeed())
+		Expect(encoder.WriteField(hf2)).To(Succeed())
+		Expect(encoder.WriteField(hf3)).To(Succeed())
+
+		data, requiredInsertCount, deltaBase := readPrefix(output.Bytes())
+		Expect(requiredInsertCount).To(BeZero())
+		Expect(deltaBase).To(BeZero())
+
+		data = checkHeaderFieldWithNameRef(data, hf1)
+		data = checkHeaderFieldWithNameRef(data, hf2)
+		data = checkHeaderFieldWithNameRef(data, hf3)
 		Expect(data).To(BeEmpty())
 	})
 

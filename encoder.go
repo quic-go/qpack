@@ -29,7 +29,27 @@ func (e *Encoder) WriteField(f HeaderField) error {
 		e.wrotePrefix = true
 	}
 
-	e.writeLiteralFieldWithoutNameReference(f)
+	idxAndVals, nameFound := encoderMap[f.Name]
+	if nameFound {
+		if idxAndVals.values == nil {
+			if len(f.Value) == 0 {
+				e.writeIndexedField(idxAndVals.idx)
+			} else {
+				e.writeLiteralFieldWithNameReference(&f, idxAndVals.idx)
+			}
+		} else {
+			valIdx, valueFound := idxAndVals.values[f.Value]
+			if valueFound {
+				e.writeIndexedField(valIdx)
+			} else {
+				e.writeLiteralFieldWithNameReference(&f, idxAndVals.idx)
+			}
+		}
+
+	} else {
+		e.writeLiteralFieldWithoutNameReference(f)
+	}
+
 	e.w.Write(e.buf)
 	e.buf = e.buf[:0]
 	return nil
@@ -49,4 +69,26 @@ func (e *Encoder) writeLiteralFieldWithoutNameReference(f HeaderField) {
 	e.buf = append(e.buf, []byte(f.Name)...)
 	e.buf = appendVarInt(e.buf, 7, uint64(len(f.Value)))
 	e.buf = append(e.buf, []byte(f.Value)...)
+}
+
+// Encodes a header field whose name is present in one of the
+// tables.
+func (e *Encoder) writeLiteralFieldWithNameReference(
+	f *HeaderField, idx uint8) {
+	offset := len(e.buf)
+	e.buf = appendVarInt(e.buf, 4, uint64(idx))
+	// Set the 01NTxxxx pattern, forcing N to 0 and T to 1
+	e.buf[offset] ^= 0x50
+
+	e.buf = appendVarInt(e.buf, 7, uint64(len(f.Value)))
+	e.buf = append(e.buf, []byte(f.Value)...)
+}
+
+// Encodes an indexed field, meaning it's entirely defined in one of the
+// tables.
+func (e *Encoder) writeIndexedField(idx uint8) {
+	offset := len(e.buf)
+	e.buf = appendVarInt(e.buf, 6, uint64(idx))
+	// Set the 1Txxxxxx pattern, forcing T to 1
+	e.buf[offset] ^= 0xc0
 }

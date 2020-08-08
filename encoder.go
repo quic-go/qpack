@@ -2,6 +2,8 @@ package qpack
 
 import (
 	"io"
+
+	"golang.org/x/net/http2/hpack"
 )
 
 // An Encoder performs QPACK encoding.
@@ -64,31 +66,31 @@ func (e *Encoder) Close() error {
 
 func (e *Encoder) writeLiteralFieldWithoutNameReference(f HeaderField) {
 	offset := len(e.buf)
-	e.buf = appendVarInt(e.buf, 3, uint64(len(f.Name)))
-	e.buf[offset] ^= 0x20
-	e.buf = append(e.buf, []byte(f.Name)...)
-	e.buf = appendVarInt(e.buf, 7, uint64(len(f.Value)))
-	e.buf = append(e.buf, []byte(f.Value)...)
+	e.buf = appendVarInt(e.buf, 3, hpack.HuffmanEncodeLength(f.Name))
+	e.buf[offset] ^= 0x20 ^ 0x8
+	e.buf = hpack.AppendHuffmanString(e.buf, f.Name)
+	offset = len(e.buf)
+	e.buf = appendVarInt(e.buf, 7, hpack.HuffmanEncodeLength(f.Value))
+	e.buf[offset] ^= 0x80
+	e.buf = hpack.AppendHuffmanString(e.buf, f.Value)
 }
 
-// Encodes a header field whose name is present in one of the
-// tables.
-func (e *Encoder) writeLiteralFieldWithNameReference(
-	f *HeaderField, idx uint8) {
+// Encodes a header field whose name is present in one of the tables.
+func (e *Encoder) writeLiteralFieldWithNameReference(f *HeaderField, id uint8) {
 	offset := len(e.buf)
-	e.buf = appendVarInt(e.buf, 4, uint64(idx))
+	e.buf = appendVarInt(e.buf, 4, uint64(id))
 	// Set the 01NTxxxx pattern, forcing N to 0 and T to 1
 	e.buf[offset] ^= 0x50
-
-	e.buf = appendVarInt(e.buf, 7, uint64(len(f.Value)))
-	e.buf = append(e.buf, []byte(f.Value)...)
+	offset = len(e.buf)
+	e.buf = appendVarInt(e.buf, 7, hpack.HuffmanEncodeLength(f.Value))
+	e.buf[offset] ^= 0x80
+	e.buf = hpack.AppendHuffmanString(e.buf, f.Value)
 }
 
-// Encodes an indexed field, meaning it's entirely defined in one of the
-// tables.
-func (e *Encoder) writeIndexedField(idx uint8) {
+// Encodes an indexed field, meaning it's entirely defined in one of the tables.
+func (e *Encoder) writeIndexedField(id uint8) {
 	offset := len(e.buf)
-	e.buf = appendVarInt(e.buf, 6, uint64(idx))
+	e.buf = appendVarInt(e.buf, 6, uint64(id))
 	// Set the 1Txxxxxx pattern, forcing T to 1
 	e.buf[offset] ^= 0xc0
 }

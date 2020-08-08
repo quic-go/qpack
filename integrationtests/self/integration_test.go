@@ -162,7 +162,9 @@ var _ = Describe("Self Tests", func() {
 	It("uses the static table for field names, for fields with values", func() {
 		var hf qpack.HeaderField
 		for {
-			if entry := staticTable[rand.Intn(len(staticTable))]; len(entry.Value) > 0 {
+			// Only use values with at least 2 characters.
+			// This makes sure that Huffman enocding doesn't compress them as much as encoding it using the static table would.
+			if entry := staticTable[rand.Intn(len(staticTable))]; len(entry.Value) > 1 {
 				hf = qpack.HeaderField{
 					Name:  entry.Name,
 					Value: randomString(20),
@@ -184,7 +186,9 @@ var _ = Describe("Self Tests", func() {
 	It("uses the static table for field values", func() {
 		var hf qpack.HeaderField
 		for {
-			if entry := staticTable[rand.Intn(len(staticTable))]; len(entry.Value) > 0 {
+			// Only use values with at least 2 characters.
+			// This makes sure that Huffman enocding doesn't compress them as much as encoding it using the static table would.
+			if entry := staticTable[rand.Intn(len(staticTable))]; len(entry.Value) > 1 {
 				hf = qpack.HeaderField{
 					Name:  entry.Name,
 					Value: entry.Value,

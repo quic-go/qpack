@@ -3,6 +3,8 @@ package qpack
 import (
 	"bytes"
 
+	"golang.org/x/net/http2/hpack"
+
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 )
@@ -29,41 +31,43 @@ var _ = Describe("Encoder", func() {
 
 	checkHeaderField := func(data []byte, hf HeaderField) []byte {
 		Expect(data[0] & (0x80 ^ 0x40 ^ 0x20)).To(Equal(uint8(0x20))) // 001xxxxx
-		Expect(data[0] & 0x8).To(BeZero())                            // no Huffman encoding
+		Expect(data[0] & 0x8).ToNot(BeZero())                         // Huffman encoding
 		nameLen, data, err := readVarInt(3, data)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(nameLen).To(BeEquivalentTo(len(hf.Name)))
-		Expect(string(data[:len(hf.Name)])).To(Equal(hf.Name))
-		valueLen, data, err := readVarInt(7, data[len(hf.Name):])
+		l := hpack.HuffmanEncodeLength(hf.Name)
+		Expect(nameLen).To(BeEquivalentTo(l))
+		Expect(hpack.HuffmanDecodeToString(data[:l])).To(Equal(hf.Name))
+		valueLen, data, err := readVarInt(7, data[l:])
 		Expect(err).ToNot(HaveOccurred())
-		Expect(valueLen).To(BeEquivalentTo(len(hf.Value)))
-		Expect(string(data[:len(hf.Value)])).To(Equal(hf.Value))
-		return data[len(hf.Value):]
+		l = hpack.HuffmanEncodeLength(hf.Value)
+		Expect(valueLen).To(BeEquivalentTo(l))
+		Expect(hpack.HuffmanDecodeToString(data[:l])).To(Equal(hf.Value))
+		return data[l:]
 	}
 
-	// Reads one indexed field line representation from data and verifies it
-	// matches expected_hf.
+	// Reads one indexed field line representation from data and verifies it matches hf.
 	// Returns the leftover bytes from data.
-	checkIndexedHeaderField := func(data []byte, expected_hf HeaderField) []byte {
+	checkIndexedHeaderField := func(data []byte, hf HeaderField) []byte {
 		Expect(data[0] >> 7).To(Equal(uint8(1))) // 1Txxxxxx
 		index, data, err := readVarInt(6, data)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(staticTableEntries[index]).To(Equal(expected_hf))
+		Expect(staticTableEntries[index]).To(Equal(hf))
 		return data
 	}
 
-	checkHeaderFieldWithNameRef := func(data []byte, expected_hf HeaderField) []byte {
+	checkHeaderFieldWithNameRef := func(data []byte, hf HeaderField) []byte {
 		// read name reference
 		Expect(data[0] >> 6).To(Equal(uint8(1))) // 01NTxxxx
 		index, data, err := readVarInt(4, data)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(staticTableEntries[index].Name).To(Equal(expected_hf.Name))
+		Expect(staticTableEntries[index].Name).To(Equal(hf.Name))
 		// read literal value
 		valueLen, data, err := readVarInt(7, data)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(valueLen).To(BeEquivalentTo(len(expected_hf.Value)))
-		Expect(string(data[:len(expected_hf.Value)])).To(Equal(expected_hf.Value))
-		return data[len(expected_hf.Value):]
+		l := hpack.HuffmanEncodeLength(hf.Value)
+		Expect(valueLen).To(BeEquivalentTo(l))
+		Expect(hpack.HuffmanDecodeToString(data[:l])).To(Equal(hf.Value))
+		return data[l:]
 	}
 
 	It("encodes a single field", func() {

@@ -5,7 +5,8 @@ linters:
   enable:
     - deadcode
     - goconst
-    - gofmt
+    - gofmt # redundant, since gofmt *should* be a no-op after gofumpt
+    - gofumpt
     - goimports
     - gosimple
     - ineffassign

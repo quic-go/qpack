@@ -24,7 +24,6 @@ func currentDir() string {
 }
 
 var _ = Describe("Interop", func() {
-
 	// find all encoded files with a dynamic table size of 0
 	findFiles := func() []string {
 		var files []string

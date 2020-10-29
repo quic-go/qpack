@@ -1,0 +1,60 @@
+on: [ push, pull_request ]
+
+jobs:
+  unit:
+    strategy:
+      matrix:
+        go: [ "1.14", "1.15" ]
+    runs-on: ubuntu-latest
+    name: Unit tests (Go ${{ matrix.go }})
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-go@v2
+        with: 
+          go-version: ${{ matrix.go }}
+      - run: go version
+      - name: Install test tools
+        run: |
+          go get golang.org/x/tools/cmd/cover
+          go get github.com/onsi/ginkgo/ginkgo
+          go get github.com/onsi/gomega
+      - name: Install dependencies
+        run: go build
+      - name: Run tests
+        run: ginkgo -r -v -cover -randomizeAllSpecs -randomizeSuites -trace -skipPackage integrationtests
+      - name: Run tests (32 bit)
+        env:
+          GOARCH: 386
+        run: ginkgo -r -v -cover -coverprofile coverage.txt -outputdir . -randomizeAllSpecs -randomizeSuites -trace -skipPackage integrationtests
+      - name: Run tests with race detector
+        run: ginkgo -r -v -race -randomizeAllSpecs -randomizeSuites -trace -skipPackage integrationtests
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v1
+        with:
+          file: coverage.txt
+          env_vars: GO=${{ matrix.go }}
+  integration:
+    strategy:
+      matrix:
+        go: [ "1.14", "1.15" ]
+    runs-on: ubuntu-latest
+    name: Integration tests (Go ${{ matrix.go }})
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-go@v2
+        with: 
+          go-version: ${{ matrix.go }}
+      - run: go version
+      - name: Install test tools
+        run: |
+          go get golang.org/x/tools/cmd/cover
+          go get github.com/onsi/ginkgo/ginkgo
+          go get github.com/onsi/gomega
+      - name: Install dependencies
+        run: go build
+      - name: Run tests
+        run: |
+          for i in {1..25}; do
+            ginkgo -race -v -randomizeAllSpecs -trace integrationtests/self;
+          done
+

@@ -81,7 +81,7 @@ var staticTableEntries = [...]HeaderField{
 	{Name: "access-control-allow-methods", Value: "get, post, options"},
 	{Name: "access-control-allow-methods", Value: "options"},
 	{Name: "access-control-expose-headers", Value: "content-length"},
-	{Name: "access-control-expose-headers", Value: "content-type"},
+	{Name: "access-control-request-headers", Value: "content-type"},
 	{Name: "access-control-request-method", Value: "get"},
 	{Name: "access-control-request-method", Value: "post"},
 	{Name: "alt-svc", Value: "clear"},
@@ -215,7 +215,9 @@ var encoderMap = map[string]indexAndValues{
 		"options":            78}},
 	"access-control-expose-headers": {79, map[string]uint8{
 		"content-length": 79,
-		"content-type":   80}},
+	}},
+	"access-control-request-headers": {80, map[string]uint8{
+		"content-type": 80}},
 	"access-control-request-method": {81, map[string]uint8{
 		"get":  81,
 		"post": 82}},

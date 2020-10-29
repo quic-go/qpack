@@ -33,4 +33,28 @@ jobs:
         with:
           file: coverage.txt
           env_vars: GO=${{ matrix.go }}
+  integration:
+    strategy:
+      matrix:
+        go: [ "1.14", "1.15" ]
+    runs-on: ubuntu-latest
+    name: Integration tests (Go ${{ matrix.go }})
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-go@v2
+        with: 
+          go-version: ${{ matrix.go }}
+      - run: go version
+      - name: Install test tools
+        run: |
+          go get golang.org/x/tools/cmd/cover
+          go get github.com/onsi/ginkgo/ginkgo
+          go get github.com/onsi/gomega
+      - name: Install dependencies
+        run: go build
+      - name: Run tests
+        run: |
+          for i in {1..25}; do
+            ginkgo -race -v -randomizeAllSpecs -trace integrationtests/self;
+          done
 

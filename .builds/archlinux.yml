@@ -1,0 +1,14 @@
+image: archlinux
+packages:
+  - go
+sources:
+  - https://github.com/marten-seemann/qpack
+tasks:
+  - setup: |
+    go version
+    go env
+    go get github.com/onsi/ginkgo/ginkgo
+    go get github.com/onsi/gomega
+    go build
+  - test: |
+      ginkgo -r -v -cover -randomizeAllSpecs -randomizeSuites -trace -skipPackage integrationtests

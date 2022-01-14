@@ -1,6 +1,6 @@
 module github.com/marten-seemann/qpack
 
-go 1.14
+go 1.16
 
 require (
 	github.com/onsi/ginkgo v1.14.0

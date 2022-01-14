@@ -4,7 +4,7 @@ jobs:
   unit:
     strategy:
       matrix:
-        go: [ "1.14", "1.15" ]
+        go: [ "1.16.x", "1.17.x" ]
     runs-on: ubuntu-latest
     name: Unit tests (Go ${{ matrix.go }})
     steps:
@@ -36,7 +36,7 @@ jobs:
   integration:
     strategy:
       matrix:
-        go: [ "1.14", "1.15" ]
+        go: [ "1.16.x", "1.17.x" ]
     runs-on: ubuntu-latest
     name: Integration tests (Go ${{ matrix.go }})
     steps:

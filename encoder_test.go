@@ -2,6 +2,7 @@ package qpack
 
 import (
 	"bytes"
+	"io"
 
 	"golang.org/x/net/http2/hpack"
 
@@ -9,14 +10,28 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+// errWriter wraps bytes.Buffer and optionally fails on every write
+// useful for testing misbehaving writers
+type errWriter struct {
+	bytes.Buffer
+	fail bool
+}
+
+func (ew *errWriter) Write(b []byte) (int, error) {
+	if ew.fail {
+		return 0, io.ErrClosedPipe
+	}
+	return ew.Buffer.Write(b)
+}
+
 var _ = Describe("Encoder", func() {
 	var (
 		encoder *Encoder
-		output  *bytes.Buffer
+		output  *errWriter
 	)
 
 	BeforeEach(func() {
-		output = &bytes.Buffer{}
+		output = &errWriter{}
 		encoder = NewEncoder(output)
 	})
 
@@ -80,6 +95,12 @@ var _ = Describe("Encoder", func() {
 
 		data = checkHeaderField(data, hf)
 		Expect(data).To(BeEmpty())
+	})
+
+	It("encodes fails to encode when writer errs", func() {
+		hf := HeaderField{Name: "foobar", Value: "lorem ipsum"}
+		output.fail = true
+		Expect(encoder.WriteField(hf)).To(MatchError("io: read/write on closed pipe"))
 	})
 
 	It("encodes multiple fields", func() {

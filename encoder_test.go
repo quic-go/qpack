@@ -6,7 +6,7 @@ import (
 
 	"golang.org/x/net/http2/hpack"
 
-	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 

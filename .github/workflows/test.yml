@@ -14,17 +14,17 @@ jobs:
           go-version: ${{ matrix.go }}
       - run: go version
       - name: Install test tools
-        run: go install github.com/onsi/ginkgo/ginkgo
+        run: go install github.com/onsi/ginkgo/v2/ginkgo@latest
       - name: Install dependencies
         run: go build
       - name: Run tests
-        run: ginkgo -r -v -cover -randomizeAllSpecs -randomizeSuites -trace -skipPackage integrationtests
+        run: ginkgo -r -v -cover -randomize-all -randomize-suites -trace -skip-package integrationtests
       - name: Run tests (32 bit)
         env:
           GOARCH: 386
-        run: ginkgo -r -v -cover -coverprofile coverage.txt -outputdir . -randomizeAllSpecs -randomizeSuites -trace -skipPackage integrationtests
+        run: ginkgo -r -v -cover -coverprofile coverage.txt -output-dir . -randomize-all -randomize-suites -trace -skip-package integrationtests
       - name: Run tests with race detector
-        run: ginkgo -r -v -race -randomizeAllSpecs -randomizeSuites -trace -skipPackage integrationtests
+        run: ginkgo -r -v -race -randomize-all -randomize-suites -trace -skip-package integrationtests
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v1
         with:
@@ -43,12 +43,12 @@ jobs:
           go-version: ${{ matrix.go }}
       - run: go version
       - name: Install test tools
-        run: go install github.com/onsi/ginkgo/ginkgo
+        run: go install github.com/onsi/ginkgo/v2/ginkgo@latest
       - name: Install dependencies
         run: go build
       - name: Run tests
         run: |
           for i in {1..25}; do
-            ginkgo -race -v -randomizeAllSpecs -trace integrationtests/self;
+            ginkgo -race -v -randomize-all -trace integrationtests/self;
           done
 

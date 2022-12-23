@@ -1,4 +1,4 @@
-module github.com/marten-seemann/qpack
+module github.com/quic-go/qpack
 
 go 1.18
 

@@ -7,7 +7,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/marten-seemann/qpack"
+	"github.com/quic-go/qpack"
 )
 
 func main() {

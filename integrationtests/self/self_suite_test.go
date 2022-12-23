@@ -5,7 +5,7 @@ import (
 	"testing"
 	_ "unsafe"
 
-	"github.com/marten-seemann/qpack"
+	"github.com/quic-go/qpack"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -22,7 +22,7 @@ var _ = BeforeSuite(func() {
 
 var staticTable []qpack.HeaderField
 
-//go:linkname getStaticTable github.com/marten-seemann/qpack.getStaticTable
+//go:linkname getStaticTable github.com/quic-go/qpack.getStaticTable
 func getStaticTable() []qpack.HeaderField
 
 func init() {

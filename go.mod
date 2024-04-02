@@ -1,6 +1,6 @@
 module github.com/quic-go/qpack
 
-go 1.18
+go 1.21
 
 require (
 	github.com/onsi/ginkgo/v2 v2.2.0

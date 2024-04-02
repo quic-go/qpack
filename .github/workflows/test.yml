@@ -9,7 +9,7 @@ jobs:
     name: Unit tests (Go ${{ matrix.go }})
     steps:
       - uses: actions/checkout@v3
-      - uses: actions/setup-go@v3
+      - uses: actions/setup-go@v5
         with: 
           go-version: ${{ matrix.go }}
       - run: go version
@@ -36,7 +36,7 @@ jobs:
     name: Integration tests (Go ${{ matrix.go }})
     steps:
       - uses: actions/checkout@v3
-      - uses: actions/setup-go@v3
+      - uses: actions/setup-go@v5
         with: 
           go-version: ${{ matrix.go }}
       - run: go version

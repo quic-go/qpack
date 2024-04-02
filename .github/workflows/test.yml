@@ -24,7 +24,7 @@ jobs:
       - name: Run tests with race detector
         run: go run github.com/onsi/ginkgo/v2/ginkgo -r -v -race -randomize-all -randomize-suites -trace -skip-package integrationtests
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v1
+        uses: codecov/codecov-action@v4
         with:
           file: coverage.txt
           env_vars: GO=${{ matrix.go }}

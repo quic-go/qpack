@@ -26,8 +26,9 @@ jobs:
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
-          file: coverage.txt
+          files: coverage.txt
           env_vars: GO=${{ matrix.go }}
+          token: ${{ secrets.CODECOV_TOKEN }}
   integration:
     strategy:
       matrix:

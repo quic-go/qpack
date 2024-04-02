@@ -1,9 +1,10 @@
 package self
 
 import (
-	"math/rand"
 	"testing"
 	_ "unsafe"
+
+	"golang.org/x/exp/rand"
 
 	"github.com/quic-go/qpack"
 
@@ -17,7 +18,7 @@ func TestSelf(t *testing.T) {
 }
 
 var _ = BeforeSuite(func() {
-	rand.Seed(GinkgoRandomSeed())
+	rand.Seed(uint64(GinkgoRandomSeed()))
 })
 
 var staticTable []qpack.HeaderField

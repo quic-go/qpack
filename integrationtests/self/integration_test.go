@@ -3,7 +3,8 @@ package self
 import (
 	"bytes"
 	"fmt"
-	"math/rand"
+
+	"golang.org/x/exp/rand"
 
 	"github.com/quic-go/qpack"
 
@@ -11,20 +12,20 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+func randomString(l int) string {
+	const charset = "abcdefghijklmnopqrstuvwxyz" +
+		"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	s := make([]byte, l)
+	for i := range s {
+		s[i] = charset[rand.Intn(len(charset))]
+	}
+	return string(s)
+}
+
 var _ = Describe("Self Tests", func() {
 	getEncoder := func() (*qpack.Encoder, *bytes.Buffer) {
 		output := &bytes.Buffer{}
 		return qpack.NewEncoder(output), output
-	}
-
-	randomString := func(l int) string {
-		const charset = "abcdefghijklmnopqrstuvwxyz" +
-			"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-		s := make([]byte, l)
-		for i := range s {
-			s[i] = charset[rand.Intn(len(charset))]
-		}
-		return string(s)
 	}
 
 	It("encodes and decodes a single header field", func() {

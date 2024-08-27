@@ -4,7 +4,6 @@ linters:
   disable-all: true
   enable:
     - asciicheck
-    - deadcode
     - exhaustive
     - exportloopref
     - goconst
@@ -12,16 +11,13 @@ linters:
     - gofumpt
     - goimports
     - gosimple
+    - govet
     - ineffassign
     - misspell
     - prealloc
-    - scopelint
     - staticcheck
     - stylecheck
-    - structcheck
     - unconvert
     - unparam
     - unused
-    - varcheck
-    - vet
 

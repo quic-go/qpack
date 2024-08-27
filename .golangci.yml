@@ -4,8 +4,8 @@ linters:
   disable-all: true
   enable:
     - asciicheck
+    - copyloopvar
     - exhaustive
-    - exportloopref
     - goconst
     - gofmt # redundant, since gofmt *should* be a no-op after gofumpt
     - gofumpt

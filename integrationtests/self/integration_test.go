@@ -2,209 +2,208 @@ package self
 
 import (
 	"bytes"
-	"fmt"
-
-	"golang.org/x/exp/rand"
+	"math/rand/v2"
+	"testing"
+	_ "unsafe" // for go:linkname
 
 	"github.com/quic-go/qpack"
-
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
+	"github.com/stretchr/testify/require"
 )
+
+var staticTable []qpack.HeaderField
+
+//go:linkname getStaticTable github.com/quic-go/qpack.getStaticTable
+func getStaticTable() []qpack.HeaderField
+
+func init() {
+	staticTable = getStaticTable()
+}
 
 func randomString(l int) string {
 	const charset = "abcdefghijklmnopqrstuvwxyz" +
 		"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 	s := make([]byte, l)
 	for i := range s {
-		s[i] = charset[rand.Intn(len(charset))]
+		s[i] = charset[rand.IntN(len(charset))]
 	}
 	return string(s)
 }
 
-var _ = Describe("Self Tests", func() {
-	getEncoder := func() (*qpack.Encoder, *bytes.Buffer) {
-		output := &bytes.Buffer{}
-		return qpack.NewEncoder(output), output
+func getEncoder() (*qpack.Encoder, *bytes.Buffer) {
+	output := &bytes.Buffer{}
+	return qpack.NewEncoder(output), output
+}
+
+func TestEncodingAndDecodingSingleHeaderField(t *testing.T) {
+	hf := qpack.HeaderField{
+		Name:  randomString(15),
+		Value: randomString(15),
 	}
+	encoder, output := getEncoder()
+	require.NoError(t, encoder.WriteField(hf))
+	headerFields, err := qpack.NewDecoder(nil).DecodeFull(output.Bytes())
+	require.NoError(t, err)
+	require.Equal(t, []qpack.HeaderField{hf}, headerFields)
+}
 
-	It("encodes and decodes a single header field", func() {
-		hf := qpack.HeaderField{
-			Name:  randomString(15),
-			Value: randomString(15),
-		}
-		encoder, output := getEncoder()
-		Expect(encoder.WriteField(hf)).To(Succeed())
-		headerFields, err := qpack.NewDecoder(nil).DecodeFull(output.Bytes())
-		Expect(err).ToNot(HaveOccurred())
-		Expect(headerFields).To(Equal([]qpack.HeaderField{hf}))
-	})
-
-	It("encodes and decodes multiple header fields", func() {
-		hfs := []qpack.HeaderField{
-			{Name: "foo", Value: "bar"},
-			{Name: "lorem", Value: "ipsum"},
-			{Name: randomString(15), Value: randomString(20)},
-		}
-		encoder, output := getEncoder()
-		for _, hf := range hfs {
-			Expect(encoder.WriteField(hf)).To(Succeed())
-		}
-		headerFields, err := qpack.NewDecoder(nil).DecodeFull(output.Bytes())
-		Expect(err).ToNot(HaveOccurred())
-		Expect(headerFields).To(Equal(hfs))
-	})
-
-	It("encodes and decodes multiple requests", func() {
-		hfs1 := []qpack.HeaderField{{Name: "foo", Value: "bar"}}
-		hfs2 := []qpack.HeaderField{
-			{Name: "lorem", Value: "ipsum"},
-			{Name: randomString(15), Value: randomString(20)},
-		}
-		encoder, output := getEncoder()
-		for _, hf := range hfs1 {
-			Expect(encoder.WriteField(hf)).To(Succeed())
-		}
-		req1 := append([]byte{}, output.Bytes()...)
-		output.Reset()
-		for _, hf := range hfs2 {
-			Expect(encoder.WriteField(hf)).To(Succeed())
-		}
-		req2 := append([]byte{}, output.Bytes()...)
-
-		var headerFields []qpack.HeaderField
-		decoder := qpack.NewDecoder(func(hf qpack.HeaderField) { headerFields = append(headerFields, hf) })
-		_, err := decoder.Write(req1)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(headerFields).To(Equal(hfs1))
-		headerFields = nil
-		_, err = decoder.Write(req2)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(headerFields).To(Equal(hfs2))
-	})
-
-	// replace one character by a random character at a random position
-	replaceRandomCharacter := func(s string) string {
-		pos := rand.Intn(len(s))
-		new := s[:pos]
-		for {
-			if c := randomString(1); c != string(s[pos]) {
-				new += c
-				break
-			}
-		}
-		new += s[pos+1:]
-		return new
+func TestEncodingAndDecodingMultipleHeaderFields(t *testing.T) {
+	hfs := []qpack.HeaderField{
+		{Name: "foo", Value: "bar"},
+		{Name: "lorem", Value: "ipsum"},
+		{Name: randomString(15), Value: randomString(20)},
 	}
-
-	check := func(encoded []byte, hf qpack.HeaderField) {
-		headerFields, err := qpack.NewDecoder(nil).DecodeFull(encoded)
-		ExpectWithOffset(1, err).ToNot(HaveOccurred())
-		ExpectWithOffset(1, headerFields).To(HaveLen(1))
-		ExpectWithOffset(1, headerFields[0]).To(Equal(hf))
+	encoder, output := getEncoder()
+	for _, hf := range hfs {
+		require.NoError(t, encoder.WriteField(hf))
 	}
+	headerFields, err := qpack.NewDecoder(nil).DecodeFull(output.Bytes())
+	require.NoError(t, err)
+	require.Equal(t, hfs, headerFields)
+}
 
-	// use an entry with a value, for example "set-cookie"
-	It("uses the static table for field names, for fields without values", func() {
-		var hf qpack.HeaderField
-		for {
-			if entry := staticTable[rand.Intn(len(staticTable))]; len(entry.Value) == 0 {
-				hf = qpack.HeaderField{Name: entry.Name}
-				break
-			}
-		}
-		encoder, output := getEncoder()
-		Expect(encoder.WriteField(hf)).To(Succeed())
-		encodedLen := output.Len()
-		check(output.Bytes(), hf)
-		encoder, output = getEncoder()
-		oldName := hf.Name
-		hf.Name = replaceRandomCharacter(hf.Name)
-		Expect(encoder.WriteField(hf)).To(Succeed())
-		fmt.Fprintf(GinkgoWriter, "Encoding field name:\n\t%s: %d bytes\n\t%s: %d bytes\n", oldName, encodedLen, hf.Name, output.Len())
-		Expect(output.Len()).To(BeNumerically(">", encodedLen))
-	})
+func TestEncodingAndDecodingMultipleRequests(t *testing.T) {
+	hfs1 := []qpack.HeaderField{{Name: "foo", Value: "bar"}}
+	hfs2 := []qpack.HeaderField{
+		{Name: "lorem", Value: "ipsum"},
+		{Name: randomString(15), Value: randomString(20)},
+	}
+	encoder, output := getEncoder()
+	for _, hf := range hfs1 {
+		require.NoError(t, encoder.WriteField(hf))
+	}
+	req1 := append([]byte{}, output.Bytes()...)
+	output.Reset()
+	for _, hf := range hfs2 {
+		require.NoError(t, encoder.WriteField(hf))
+	}
+	req2 := append([]byte{}, output.Bytes()...)
 
-	// use an entry with a value, for example "set-cookie",
-	// but now use a custom value
-	It("uses the static table for field names, for fields without values", func() {
-		var hf qpack.HeaderField
-		for {
-			if entry := staticTable[rand.Intn(len(staticTable))]; len(entry.Value) == 0 {
-				hf = qpack.HeaderField{
-					Name:  entry.Name,
-					Value: randomString(5),
-				}
-				break
-			}
-		}
-		encoder, output := getEncoder()
-		Expect(encoder.WriteField(hf)).To(Succeed())
-		encodedLen := output.Len()
-		check(output.Bytes(), hf)
-		encoder, output = getEncoder()
-		oldName := hf.Name
-		hf.Name = replaceRandomCharacter(hf.Name)
-		Expect(encoder.WriteField(hf)).To(Succeed())
-		fmt.Fprintf(GinkgoWriter, "Encoding field name:\n\t%s: %d bytes\n\t%s: %d bytes\n", oldName, encodedLen, hf.Name, output.Len())
-		Expect(output.Len()).To(BeNumerically(">", encodedLen))
-	})
+	var headerFields []qpack.HeaderField
+	decoder := qpack.NewDecoder(func(hf qpack.HeaderField) { headerFields = append(headerFields, hf) })
+	_, err := decoder.Write(req1)
+	require.NoError(t, err)
+	require.Equal(t, hfs1, headerFields)
+	headerFields = nil
+	_, err = decoder.Write(req2)
+	require.NoError(t, err)
+	require.Equal(t, hfs2, headerFields)
+}
 
-	// use an entry with a value, for example
-	//   cache-control -> Value: "max-age=0"
-	// but encode a different value
-	//   cache-control -> xyz
-	It("uses the static table for field names, for fields with values", func() {
-		var hf qpack.HeaderField
-		for {
-			// Only use values with at least 2 characters.
-			// This makes sure that Huffman enocding doesn't compress them as much as encoding it using the static table would.
-			if entry := staticTable[rand.Intn(len(staticTable))]; len(entry.Value) > 1 {
-				hf = qpack.HeaderField{
-					Name:  entry.Name,
-					Value: randomString(20),
-				}
-				break
-			}
+// replace one character by a random character at a random position
+func replaceRandomCharacter(s string) string {
+	pos := rand.IntN(len(s))
+	new := s[:pos]
+	for {
+		if c := randomString(1); c != string(s[pos]) {
+			new += c
+			break
 		}
-		encoder, output := getEncoder()
-		Expect(encoder.WriteField(hf)).To(Succeed())
-		encodedLen := output.Len()
-		check(output.Bytes(), hf)
-		encoder, output = getEncoder()
-		oldName := hf.Name
-		hf.Name = replaceRandomCharacter(hf.Name)
-		Expect(encoder.WriteField(hf)).To(Succeed())
-		fmt.Fprintf(GinkgoWriter, "Encoding field name:\n\t%s: %d bytes\n\t%s: %d bytes\n", oldName, encodedLen, hf.Name, output.Len())
-		Expect(output.Len()).To(BeNumerically(">", encodedLen))
-	})
+	}
+	new += s[pos+1:]
+	return new
+}
 
-	It("uses the static table for field values", func() {
-		var hf qpack.HeaderField
-		for {
-			// Only use values with at least 2 characters.
-			// This makes sure that Huffman enocding doesn't compress them as much as encoding it using the static table would.
-			if entry := staticTable[rand.Intn(len(staticTable))]; len(entry.Value) > 1 {
-				hf = qpack.HeaderField{
-					Name:  entry.Name,
-					Value: entry.Value,
-				}
-				break
-			}
+func check(t *testing.T, encoded []byte, hf qpack.HeaderField) {
+	t.Helper()
+	headerFields, err := qpack.NewDecoder(nil).DecodeFull(encoded)
+	require.NoError(t, err)
+	require.Len(t, headerFields, 1)
+	require.Equal(t, hf, headerFields[0])
+}
+
+func TestUsingStaticTableForFieldNamesWithoutValues(t *testing.T) {
+	var hf qpack.HeaderField
+	for {
+		if entry := staticTable[rand.IntN(len(staticTable))]; len(entry.Value) == 0 {
+			hf = qpack.HeaderField{Name: entry.Name}
+			break
 		}
-		encoder, output := getEncoder()
-		Expect(encoder.WriteField(hf)).To(Succeed())
-		encodedLen := output.Len()
-		check(output.Bytes(), hf)
-		encoder, output = getEncoder()
-		oldValue := hf.Value
-		hf.Value = replaceRandomCharacter(hf.Value)
-		Expect(encoder.WriteField(hf)).To(Succeed())
-		fmt.Fprintf(GinkgoWriter,
-			"Encoding field value:\n\t%s: %s -> %d bytes\n\t%s: %s -> %d bytes\n",
-			hf.Name, oldValue, encodedLen,
-			hf.Name, hf.Value, output.Len(),
-		)
-		Expect(output.Len()).To(BeNumerically(">", encodedLen))
-	})
-})
+	}
+	encoder, output := getEncoder()
+	require.NoError(t, encoder.WriteField(hf))
+	encodedLen := output.Len()
+	check(t, output.Bytes(), hf)
+	encoder, output = getEncoder()
+	oldName := hf.Name
+	hf.Name = replaceRandomCharacter(hf.Name)
+	require.NoError(t, encoder.WriteField(hf))
+	t.Logf("Encoding field name:\n\t%s: %d bytes\n\t%s: %d bytes\n", oldName, encodedLen, hf.Name, output.Len())
+	require.Greater(t, output.Len(), encodedLen)
+}
+
+func TestUsingStaticTableForFieldNamesWithCustomValues(t *testing.T) {
+	var hf qpack.HeaderField
+	for {
+		if entry := staticTable[rand.IntN(len(staticTable))]; len(entry.Value) == 0 {
+			hf = qpack.HeaderField{
+				Name:  entry.Name,
+				Value: randomString(5),
+			}
+			break
+		}
+	}
+	encoder, output := getEncoder()
+	require.NoError(t, encoder.WriteField(hf))
+	encodedLen := output.Len()
+	check(t, output.Bytes(), hf)
+	encoder, output = getEncoder()
+	oldName := hf.Name
+	hf.Name = replaceRandomCharacter(hf.Name)
+	require.NoError(t, encoder.WriteField(hf))
+	t.Logf("Encoding field name:\n\t%s: %d bytes\n\t%s: %d bytes", oldName, encodedLen, hf.Name, output.Len())
+	require.Greater(t, output.Len(), encodedLen)
+}
+
+func TestStaticTableForFieldNamesWithValues(t *testing.T) {
+	var hf qpack.HeaderField
+	for {
+		// Only use values with at least 2 characters.
+		// This makes sure that Huffman encoding doesn't compress them as much as encoding it using the static table would.
+		if entry := staticTable[rand.IntN(len(staticTable))]; len(entry.Value) > 1 {
+			hf = qpack.HeaderField{
+				Name:  entry.Name,
+				Value: randomString(20),
+			}
+			break
+		}
+	}
+	encoder, output := getEncoder()
+	require.NoError(t, encoder.WriteField(hf))
+	encodedLen := output.Len()
+	check(t, output.Bytes(), hf)
+	encoder, output = getEncoder()
+	oldName := hf.Name
+	hf.Name = replaceRandomCharacter(hf.Name)
+	require.NoError(t, encoder.WriteField(hf))
+	t.Logf("Encoding field name:\n\t%s: %d bytes\n\t%s: %d bytes", oldName, encodedLen, hf.Name, output.Len())
+	require.Greater(t, output.Len(), encodedLen)
+}
+
+func TestStaticTableForFieldValues(t *testing.T) {
+	var hf qpack.HeaderField
+	for {
+		// Only use values with at least 2 characters.
+		// This makes sure that Huffman encoding doesn't compress them as much as encoding it using the static table would.
+		if entry := staticTable[rand.IntN(len(staticTable))]; len(entry.Value) > 1 {
+			hf = qpack.HeaderField{
+				Name:  entry.Name,
+				Value: entry.Value,
+			}
+			break
+		}
+	}
+	encoder, output := getEncoder()
+	require.NoError(t, encoder.WriteField(hf))
+	encodedLen := output.Len()
+	check(t, output.Bytes(), hf)
+	encoder, output = getEncoder()
+	oldValue := hf.Value
+	hf.Value = replaceRandomCharacter(hf.Value)
+	require.NoError(t, encoder.WriteField(hf))
+	t.Logf(
+		"Encoding field value:\n\t%s: %s -> %d bytes\n\t%s: %s -> %d bytes",
+		hf.Name, oldValue, encodedLen,
+		hf.Name, hf.Value, output.Len(),
+	)
+	require.Greater(t, output.Len(), encodedLen)
+}

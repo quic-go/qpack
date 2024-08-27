@@ -1,16 +1,20 @@
 package qpack
 
 import (
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
+	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
-var _ = Describe("Header Field", func() {
-	It("says if it is pseudo", func() {
-		Expect((HeaderField{Name: ":status"}).IsPseudo()).To(BeTrue())
-		Expect((HeaderField{Name: ":authority"}).IsPseudo()).To(BeTrue())
-		Expect((HeaderField{Name: ":foobar"}).IsPseudo()).To(BeTrue())
-		Expect((HeaderField{Name: "status"}).IsPseudo()).To(BeFalse())
-		Expect((HeaderField{Name: "foobar"}).IsPseudo()).To(BeFalse())
+func TestHeaderFieldIsPseudo(t *testing.T) {
+	t.Run("Pseudo headers", func(t *testing.T) {
+		require.True(t, (HeaderField{Name: ":status"}).IsPseudo())
+		require.True(t, (HeaderField{Name: ":authority"}).IsPseudo())
+		require.True(t, (HeaderField{Name: ":foobar"}).IsPseudo())
 	})
-})
+
+	t.Run("Non-pseudo headers", func(t *testing.T) {
+		require.False(t, (HeaderField{Name: "status"}).IsPseudo())
+		require.False(t, (HeaderField{Name: "foobar"}).IsPseudo())
+	})
+}

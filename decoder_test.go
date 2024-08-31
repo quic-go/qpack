@@ -3,73 +3,77 @@ package qpack
 import (
 	"bytes"
 
+	"golang.org/x/net/http2/hpack"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"golang.org/x/net/http2/hpack"
 )
 
+type recordingDecoder struct {
+	*Decoder
+	headerFields []HeaderField
+}
+
+func newRecordingDecoder() *recordingDecoder {
+	decoder := &recordingDecoder{}
+	decoder.Decoder = NewDecoder(func(hf HeaderField) { decoder.headerFields = append(decoder.headerFields, hf) })
+	return decoder
+}
+
+func (decoder *recordingDecoder) Fields() []HeaderField { return decoder.headerFields }
+
 var _ = Describe("Decoder", func() {
-	var (
-		decoder      *Decoder
-		headerFields []HeaderField
-	)
-
-	BeforeEach(func() {
-		headerFields = nil
-		decoder = NewDecoder(func(hf HeaderField) {
-			headerFields = append(headerFields, hf)
-		})
-	})
-
 	insertPrefix := func(data []byte) []byte {
 		prefix := appendVarInt(nil, 8, 0)
 		prefix = appendVarInt(prefix, 7, 0)
 		return append(prefix, data...)
 	}
 
-	doPartialWrites := func(data []byte) {
+	doPartialWrites := func(decoder *recordingDecoder, data []byte) {
 		for i := 0; i < len(data)-1; i++ {
 			n, err := decoder.Write([]byte{data[i]})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(n).To(Equal(1))
-			Expect(headerFields).To(BeEmpty())
+			Expect(decoder.Fields()).To(BeEmpty())
 		}
 		n, err := decoder.Write([]byte{data[len(data)-1]})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(n).To(Equal(1))
-		Expect(headerFields).To(HaveLen(1))
+		Expect(decoder.Fields()).To(HaveLen(1))
 	}
 
 	It("rejects a non-zero Required Insert Count", func() {
 		prefix := appendVarInt(nil, 8, 1)
 		prefix = appendVarInt(prefix, 7, 0)
-		_, err := decoder.Write(prefix)
+		_, err := NewDecoder(nil).Write(prefix)
 		Expect(err).To(MatchError("decoding error: expected Required Insert Count to be zero"))
 	})
 
 	It("rejects a non-zero Delta Base", func() {
 		prefix := appendVarInt(nil, 8, 0)
 		prefix = appendVarInt(prefix, 7, 1)
-		_, err := decoder.Write(prefix)
+		_, err := NewDecoder(nil).Write(prefix)
 		Expect(err).To(MatchError("decoding error: expected Base to be zero"))
 	})
 
 	It("rejects unknown type bytes", func() {
-		_, err := decoder.Write(insertPrefix([]byte{0x10}))
+		_, err := NewDecoder(nil).Write(insertPrefix([]byte{0x10}))
 		Expect(err).To(MatchError("unexpected type byte: 0x10"))
 	})
 
 	Context("indexed header field", func() {
 		It("parses an indexed header field", func() {
+			decoder := newRecordingDecoder()
 			data := appendVarInt(nil, 6, 20)
 			data[0] ^= 0x80 | 0x40
 			_, err := decoder.Write(insertPrefix(data))
 			Expect(err).ToNot(HaveOccurred())
-			Expect(headerFields).To(HaveLen(1))
-			Expect(headerFields[0]).To(Equal(staticTableEntries[20]))
+			Expect(decoder.Fields()).To(HaveLen(1))
+			Expect(decoder.Fields()[0]).To(Equal(staticTableEntries[20]))
 		})
 
 		It("rejects an indexed header field that references the dynamic table", func() {
+			decoder := newRecordingDecoder()
 			data := appendVarInt(nil, 6, 20)
 			data[0] ^= 0x80 // don't set the static flag (0x40)
 			_, err := decoder.Write(insertPrefix(data))
@@ -77,36 +81,40 @@ var _ = Describe("Decoder", func() {
 		})
 
 		It("errors when a non-existent static table entry is referenced", func() {
+			decoder := newRecordingDecoder()
 			data := appendVarInt(nil, 6, 10000)
 			data[0] ^= 0x80 | 0x40
 			_, err := decoder.Write(insertPrefix(data))
 			Expect(err).To(MatchError("decoding error: invalid indexed representation index 10000"))
-			Expect(headerFields).To(BeEmpty())
+			Expect(decoder.Fields()).To(BeEmpty())
 		})
 
 		It("handles partial writes", func() {
+			decoder := newRecordingDecoder()
 			data := appendVarInt(nil, 6, 20)
 			data[0] ^= 0x80 | 0x40
 			data = insertPrefix(data)
 
-			doPartialWrites(data)
+			doPartialWrites(decoder, data)
 		})
 	})
 
 	Context("header field with name reference", func() {
 		It("parses a literal header field with name reference", func() {
+			decoder := newRecordingDecoder()
 			data := appendVarInt(nil, 4, 49)
 			data[0] ^= 0x40 | 0x10
 			data = appendVarInt(data, 7, 6)
 			data = append(data, []byte("foobar")...)
 			_, err := decoder.Write(insertPrefix(data))
 			Expect(err).ToNot(HaveOccurred())
-			Expect(headerFields).To(HaveLen(1))
-			Expect(headerFields[0].Name).To(Equal("content-type"))
-			Expect(headerFields[0].Value).To(Equal("foobar"))
+			Expect(decoder.Fields()).To(HaveLen(1))
+			Expect(decoder.Fields()[0].Name).To(Equal("content-type"))
+			Expect(decoder.Fields()[0].Value).To(Equal("foobar"))
 		})
 
 		It("parses a literal header field with name reference, with Huffman encoding", func() {
+			decoder := newRecordingDecoder()
 			data := appendVarInt(nil, 4, 49)
 			data[0] ^= 0x40 | 0x10
 			data2 := appendVarInt(nil, 7, hpack.HuffmanEncodeLength("foobar"))
@@ -114,12 +122,13 @@ var _ = Describe("Decoder", func() {
 			data = hpack.AppendHuffmanString(append(data, data2...), "foobar")
 			_, err := decoder.Write(insertPrefix(data))
 			Expect(err).ToNot(HaveOccurred())
-			Expect(headerFields).To(HaveLen(1))
-			Expect(headerFields[0].Name).To(Equal("content-type"))
-			Expect(headerFields[0].Value).To(Equal("foobar"))
+			Expect(decoder.Fields()).To(HaveLen(1))
+			Expect(decoder.Fields()[0].Name).To(Equal("content-type"))
+			Expect(decoder.Fields()[0].Value).To(Equal("foobar"))
 		})
 
 		It("rejects a literal header field with name reference that references the dynamic table", func() {
+			decoder := newRecordingDecoder()
 			data := appendVarInt(nil, 4, 49)
 			data[0] ^= 0x40 // don't set the static flag (0x10)
 			data = appendVarInt(data, 7, 6)
@@ -129,16 +138,18 @@ var _ = Describe("Decoder", func() {
 		})
 
 		It("handles partial writes", func() {
+			decoder := newRecordingDecoder()
 			data := appendVarInt(nil, 4, 49)
 			data[0] ^= 0x40 | 0x10
 			data = appendVarInt(data, 7, 6)
 			data = append(data, []byte("foobar")...)
 			data = insertPrefix(data)
 
-			doPartialWrites(data)
+			doPartialWrites(decoder, data)
 		})
 
 		It("handles partial writes, when using Huffman encoding", func() {
+			decoder := newRecordingDecoder()
 			data := appendVarInt(nil, 4, 49)
 			data[0] ^= 0x40 | 0x10
 			data2 := appendVarInt(nil, 7, hpack.HuffmanEncodeLength("foobar"))
@@ -146,12 +157,13 @@ var _ = Describe("Decoder", func() {
 			data = hpack.AppendHuffmanString(append(data, data2...), "foobar")
 			data = insertPrefix(data)
 
-			doPartialWrites(data)
+			doPartialWrites(decoder, data)
 		})
 	})
 
 	Context("header field without name reference", func() {
 		It("parses a literal header field without name reference", func() {
+			decoder := newRecordingDecoder()
 			data := appendVarInt(nil, 3, 3)
 			data[0] ^= 0x20
 			data = append(data, []byte("foo")...)
@@ -160,12 +172,13 @@ var _ = Describe("Decoder", func() {
 			data = append(data, data2...)
 			_, err := decoder.Write(insertPrefix(data))
 			Expect(err).ToNot(HaveOccurred())
-			Expect(headerFields).To(HaveLen(1))
-			Expect(headerFields[0].Name).To(Equal("foo"))
-			Expect(headerFields[0].Value).To(Equal("bar"))
+			Expect(decoder.Fields()).To(HaveLen(1))
+			Expect(decoder.Fields()[0].Name).To(Equal("foo"))
+			Expect(decoder.Fields()[0].Value).To(Equal("bar"))
 		})
 
 		It("handles partial writes", func() {
+			decoder := newRecordingDecoder()
 			data := appendVarInt(nil, 3, 3)
 			data[0] ^= 0x20
 			data = append(data, []byte("foo")...)
@@ -174,7 +187,7 @@ var _ = Describe("Decoder", func() {
 			data = append(data, data2...)
 			data = insertPrefix(data)
 
-			doPartialWrites(data)
+			doPartialWrites(decoder, data)
 		})
 	})
 

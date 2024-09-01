@@ -3,11 +3,11 @@ package qpack
 import (
 	"bytes"
 	"io"
+	"testing"
 
 	"golang.org/x/net/http2/hpack"
 
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
+	"github.com/stretchr/testify/require"
 )
 
 // errWriter wraps bytes.Buffer and optionally fails on every write
@@ -24,150 +24,160 @@ func (ew *errWriter) Write(b []byte) (int, error) {
 	return ew.Buffer.Write(b)
 }
 
-var _ = Describe("Encoder", func() {
-	var (
-		encoder *Encoder
-		output  *errWriter
-	)
+func readPrefix(t *testing.T, data []byte) (rest []byte, requiredInsertCount uint64, deltaBase uint64) {
+	var err error
+	requiredInsertCount, rest, err = readVarInt(8, data)
+	require.NoError(t, err)
+	deltaBase, rest, err = readVarInt(7, rest)
+	require.NoError(t, err)
+	return
+}
 
-	BeforeEach(func() {
-		output = &errWriter{}
-		encoder = NewEncoder(output)
-	})
+func checkHeaderField(t *testing.T, data []byte, hf HeaderField) []byte {
+	require.Equal(t, uint8(0x20), data[0]&(0x80^0x40^0x20)) // 001xxxxx
+	require.NotZero(t, data[0]&0x8)                         // Huffman encoding
+	nameLen, data, err := readVarInt(3, data)
+	require.NoError(t, err)
+	l := hpack.HuffmanEncodeLength(hf.Name)
+	require.Equal(t, l, nameLen)
+	decodedName, err := hpack.HuffmanDecodeToString(data[:l])
+	require.NoError(t, err)
+	require.Equal(t, hf.Name, decodedName)
+	valueLen, data, err := readVarInt(7, data[l:])
+	require.NoError(t, err)
+	l = hpack.HuffmanEncodeLength(hf.Value)
+	require.Equal(t, l, valueLen)
+	decodedValue, err := hpack.HuffmanDecodeToString(data[:l])
+	require.NoError(t, err)
+	require.Equal(t, hf.Value, decodedValue)
+	return data[l:]
+}
 
-	readPrefix := func(data []byte) (rest []byte, requiredInsertCount uint64, deltaBase uint64) {
-		var err error
-		requiredInsertCount, rest, err = readVarInt(8, data)
-		Expect(err).ToNot(HaveOccurred())
-		deltaBase, rest, err = readVarInt(7, rest)
-		Expect(err).ToNot(HaveOccurred())
-		return
+// Reads one indexed field line representation from data and verifies it matches hf.
+// Returns the leftover bytes from data.
+func checkIndexedHeaderField(t *testing.T, data []byte, hf HeaderField) []byte {
+	require.Equal(t, uint8(1), data[0]>>7) // 1Txxxxxx
+	index, data, err := readVarInt(6, data)
+	require.NoError(t, err)
+	require.Equal(t, hf, staticTableEntries[index])
+	return data
+}
+
+func checkHeaderFieldWithNameRef(t *testing.T, data []byte, hf HeaderField) []byte {
+	// read name reference
+	require.Equal(t, uint8(1), data[0]>>6) // 01NTxxxx
+	index, data, err := readVarInt(4, data)
+	require.NoError(t, err)
+	require.Equal(t, hf.Name, staticTableEntries[index].Name)
+	// read literal value
+	valueLen, data, err := readVarInt(7, data)
+	require.NoError(t, err)
+	l := hpack.HuffmanEncodeLength(hf.Value)
+	require.Equal(t, l, valueLen)
+	decodedValue, err := hpack.HuffmanDecodeToString(data[:l])
+	require.NoError(t, err)
+	require.Equal(t, hf.Value, decodedValue)
+	return data[l:]
+}
+
+func TestEncoderEncodesSingleField(t *testing.T) {
+	output := &errWriter{}
+	encoder := NewEncoder(output)
+
+	hf := HeaderField{Name: "foobar", Value: "lorem ipsum"}
+	require.NoError(t, encoder.WriteField(hf))
+
+	data, requiredInsertCount, deltaBase := readPrefix(t, output.Bytes())
+	require.Zero(t, requiredInsertCount)
+	require.Zero(t, deltaBase)
+
+	data = checkHeaderField(t, data, hf)
+	require.Empty(t, data)
+}
+
+func TestEncoderFailsToEncodeWhenWriterErrs(t *testing.T) {
+	output := &errWriter{fail: true}
+	encoder := NewEncoder(output)
+
+	hf := HeaderField{Name: "foobar", Value: "lorem ipsum"}
+	err := encoder.WriteField(hf)
+	require.EqualError(t, err, "io: read/write on closed pipe")
+}
+
+func TestEncoderEncodesMultipleFields(t *testing.T) {
+	output := &errWriter{}
+	encoder := NewEncoder(output)
+
+	hf1 := HeaderField{Name: "foobar", Value: "lorem ipsum"}
+	hf2 := HeaderField{Name: "raboof", Value: "dolor sit amet"}
+	require.NoError(t, encoder.WriteField(hf1))
+	require.NoError(t, encoder.WriteField(hf2))
+
+	data, requiredInsertCount, deltaBase := readPrefix(t, output.Bytes())
+	require.Zero(t, requiredInsertCount)
+	require.Zero(t, deltaBase)
+
+	data = checkHeaderField(t, data, hf1)
+	data = checkHeaderField(t, data, hf2)
+	require.Empty(t, data)
+}
+
+func TestEncoderEncodesAllFieldsOfStaticTable(t *testing.T) {
+	output := &errWriter{}
+	encoder := NewEncoder(output)
+
+	for _, hf := range staticTableEntries {
+		require.NoError(t, encoder.WriteField(hf))
 	}
 
-	checkHeaderField := func(data []byte, hf HeaderField) []byte {
-		Expect(data[0] & (0x80 ^ 0x40 ^ 0x20)).To(Equal(uint8(0x20))) // 001xxxxx
-		Expect(data[0] & 0x8).ToNot(BeZero())                         // Huffman encoding
-		nameLen, data, err := readVarInt(3, data)
-		Expect(err).ToNot(HaveOccurred())
-		l := hpack.HuffmanEncodeLength(hf.Name)
-		Expect(nameLen).To(BeEquivalentTo(l))
-		Expect(hpack.HuffmanDecodeToString(data[:l])).To(Equal(hf.Name))
-		valueLen, data, err := readVarInt(7, data[l:])
-		Expect(err).ToNot(HaveOccurred())
-		l = hpack.HuffmanEncodeLength(hf.Value)
-		Expect(valueLen).To(BeEquivalentTo(l))
-		Expect(hpack.HuffmanDecodeToString(data[:l])).To(Equal(hf.Value))
-		return data[l:]
+	data, requiredInsertCount, deltaBase := readPrefix(t, output.Bytes())
+	require.Zero(t, requiredInsertCount)
+	require.Zero(t, deltaBase)
+
+	for _, hf := range staticTableEntries {
+		data = checkIndexedHeaderField(t, data, hf)
 	}
+	require.Empty(t, data)
+}
 
-	// Reads one indexed field line representation from data and verifies it matches hf.
-	// Returns the leftover bytes from data.
-	checkIndexedHeaderField := func(data []byte, hf HeaderField) []byte {
-		Expect(data[0] >> 7).To(Equal(uint8(1))) // 1Txxxxxx
-		index, data, err := readVarInt(6, data)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(staticTableEntries[index]).To(Equal(hf))
-		return data
-	}
+func TestEncodeFieldsWithNameReferenceInStaticTable(t *testing.T) {
+	output := &errWriter{}
+	encoder := NewEncoder(output)
 
-	checkHeaderFieldWithNameRef := func(data []byte, hf HeaderField) []byte {
-		// read name reference
-		Expect(data[0] >> 6).To(Equal(uint8(1))) // 01NTxxxx
-		index, data, err := readVarInt(4, data)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(staticTableEntries[index].Name).To(Equal(hf.Name))
-		// read literal value
-		valueLen, data, err := readVarInt(7, data)
-		Expect(err).ToNot(HaveOccurred())
-		l := hpack.HuffmanEncodeLength(hf.Value)
-		Expect(valueLen).To(BeEquivalentTo(l))
-		Expect(hpack.HuffmanDecodeToString(data[:l])).To(Equal(hf.Value))
-		return data[l:]
-	}
+	hf1 := HeaderField{Name: ":status", Value: "666"}
+	hf2 := HeaderField{Name: "server", Value: "lorem ipsum"}
+	hf3 := HeaderField{Name: ":method", Value: ""}
+	require.NoError(t, encoder.WriteField(hf1))
+	require.NoError(t, encoder.WriteField(hf2))
+	require.NoError(t, encoder.WriteField(hf3))
 
-	It("encodes a single field", func() {
-		hf := HeaderField{Name: "foobar", Value: "lorem ipsum"}
-		Expect(encoder.WriteField(hf)).To(Succeed())
+	data, requiredInsertCount, deltaBase := readPrefix(t, output.Bytes())
+	require.Zero(t, requiredInsertCount)
+	require.Zero(t, deltaBase)
 
-		data, requiredInsertCount, deltaBase := readPrefix(output.Bytes())
-		Expect(requiredInsertCount).To(BeZero())
-		Expect(deltaBase).To(BeZero())
+	data = checkHeaderFieldWithNameRef(t, data, hf1)
+	data = checkHeaderFieldWithNameRef(t, data, hf2)
+	data = checkHeaderFieldWithNameRef(t, data, hf3)
+	require.Empty(t, data)
+}
 
-		data = checkHeaderField(data, hf)
-		Expect(data).To(BeEmpty())
-	})
+func TestEncodeMultipleRequests(t *testing.T) {
+	output := &errWriter{}
+	encoder := NewEncoder(output)
 
-	It("encodes fails to encode when writer errs", func() {
-		hf := HeaderField{Name: "foobar", Value: "lorem ipsum"}
-		output.fail = true
-		Expect(encoder.WriteField(hf)).To(MatchError("io: read/write on closed pipe"))
-	})
+	hf1 := HeaderField{Name: "foobar", Value: "lorem ipsum"}
+	require.NoError(t, encoder.WriteField(hf1))
+	data, requiredInsertCount, deltaBase := readPrefix(t, output.Bytes())
+	require.Zero(t, requiredInsertCount)
+	require.Zero(t, deltaBase)
+	require.Empty(t, checkHeaderField(t, data, hf1))
 
-	It("encodes multiple fields", func() {
-		hf1 := HeaderField{Name: "foobar", Value: "lorem ipsum"}
-		hf2 := HeaderField{Name: "raboof", Value: "dolor sit amet"}
-		Expect(encoder.WriteField(hf1)).To(Succeed())
-		Expect(encoder.WriteField(hf2)).To(Succeed())
-
-		data, requiredInsertCount, deltaBase := readPrefix(output.Bytes())
-		Expect(requiredInsertCount).To(BeZero())
-		Expect(deltaBase).To(BeZero())
-
-		data = checkHeaderField(data, hf1)
-		data = checkHeaderField(data, hf2)
-		Expect(data).To(BeEmpty())
-	})
-
-	It("encodes all the fields of the static table", func() {
-		for _, hf := range staticTableEntries {
-			Expect(encoder.WriteField(hf)).To(Succeed())
-		}
-
-		data, requiredInsertCount, deltaBase := readPrefix(output.Bytes())
-		Expect(requiredInsertCount).To(BeZero())
-		Expect(deltaBase).To(BeZero())
-
-		for _, hf := range staticTableEntries {
-			data = checkIndexedHeaderField(data, hf)
-		}
-		Expect(data).To(BeEmpty())
-	})
-
-	It("encodes fields with name reference in the static table", func() {
-		hf1 := HeaderField{Name: ":status", Value: "666"}
-		hf2 := HeaderField{Name: "server", Value: "lorem ipsum"}
-		hf3 := HeaderField{Name: ":method", Value: ""}
-		Expect(encoder.WriteField(hf1)).To(Succeed())
-		Expect(encoder.WriteField(hf2)).To(Succeed())
-		Expect(encoder.WriteField(hf3)).To(Succeed())
-
-		data, requiredInsertCount, deltaBase := readPrefix(output.Bytes())
-		Expect(requiredInsertCount).To(BeZero())
-		Expect(deltaBase).To(BeZero())
-
-		data = checkHeaderFieldWithNameRef(data, hf1)
-		data = checkHeaderFieldWithNameRef(data, hf2)
-		data = checkHeaderFieldWithNameRef(data, hf3)
-		Expect(data).To(BeEmpty())
-	})
-
-	It("encodes multiple requests", func() {
-		hf1 := HeaderField{Name: "foobar", Value: "lorem ipsum"}
-		Expect(encoder.WriteField(hf1)).To(Succeed())
-		data, requiredInsertCount, deltaBase := readPrefix(output.Bytes())
-		Expect(requiredInsertCount).To(BeZero())
-		Expect(deltaBase).To(BeZero())
-		data = checkHeaderField(data, hf1)
-		Expect(data).To(BeEmpty())
-
-		output.Reset()
-		Expect(encoder.Close())
-		hf2 := HeaderField{Name: "raboof", Value: "dolor sit amet"}
-		Expect(encoder.WriteField(hf2)).To(Succeed())
-		data, requiredInsertCount, deltaBase = readPrefix(output.Bytes())
-		Expect(requiredInsertCount).To(BeZero())
-		Expect(deltaBase).To(BeZero())
-		data = checkHeaderField(data, hf2)
-		Expect(data).To(BeEmpty())
-	})
-})
+	output.Reset()
+	require.NoError(t, encoder.Close())
+	hf2 := HeaderField{Name: "raboof", Value: "dolor sit amet"}
+	require.NoError(t, encoder.WriteField(hf2))
+	data, requiredInsertCount, deltaBase = readPrefix(t, output.Bytes())
+	require.Zero(t, requiredInsertCount)
+	require.Zero(t, deltaBase)
+	require.Empty(t, checkHeaderField(t, data, hf2))
+}

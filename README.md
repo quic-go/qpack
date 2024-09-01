@@ -16,5 +16,5 @@ git submodule update --init --recursive
 
 Then run the tests:
 ```bash
-ginkgo -r integrationtests
+go test -v ./integrationtests/interop/
 ```

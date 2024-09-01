@@ -33,10 +33,14 @@ jobs:
     name: Integration tests (Go ${{ matrix.go }})
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
       - uses: actions/setup-go@v5
         with: 
           go-version: ${{ matrix.go }}
       - run: go version
+      - name: Run interop tests
+        run: go test -v ./integrationtests/interop/
       - name: Run integration tests
         run: |
           for i in {1..25}; do

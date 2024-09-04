@@ -119,9 +119,21 @@ func TestDecoderInvalidIndexedHeaderFields(t *testing.T) {
 }
 
 func TestDecoderLiteralHeaderFieldWithNameReference(t *testing.T) {
+	t.Run("without the N-bit", func(t *testing.T) {
+		testDecoderLiteralHeaderFieldWithNameReference(t, false)
+	})
+	t.Run("with the N-bit", func(t *testing.T) {
+		testDecoderLiteralHeaderFieldWithNameReference(t, true)
+	})
+}
+
+func testDecoderLiteralHeaderFieldWithNameReference(t *testing.T, n bool) {
 	decoder := newRecordingDecoder()
 	data := appendVarInt(nil, 4, 49)
 	data[0] ^= 0x40 | 0x10
+	if n {
+		data[0] |= 0x20
+	}
 	data = appendVarInt(data, 7, 6)
 	data = append(data, []byte("foobar")...)
 	doPartialWrites(t, decoder, insertPrefix(data))

@@ -9,7 +9,7 @@ jobs:
     name: Unit tests (Go ${{ matrix.go }})
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with: 
           go-version: ${{ matrix.go }}
       - run: go version
@@ -35,7 +35,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: 'recursive'
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with: 
           go-version: ${{ matrix.go }}
       - run: go version

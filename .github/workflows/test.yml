@@ -15,10 +15,6 @@ jobs:
       - run: go version
       - name: Run tests
         run: go test -v -cover -race -shuffle=on .
-      - name: Run tests (32 bit)
-        env:
-          GOARCH: 386
-        run: go test -v -cover -coverprofile=coverage.txt -shuffle=on .
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:

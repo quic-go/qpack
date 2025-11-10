@@ -4,7 +4,10 @@ package qpack
 
 import "errors"
 
-var errVarintOverflow = errors.New("varint integer overflow")
+var (
+	errVarintOverflow = errors.New("varint integer overflow")
+	errNeedMore       = errors.New("need more data")
+)
 
 // appendVarInt appends i, as encoded in variable integer form using n
 // bit prefix, to dst and returns the extended buffer.

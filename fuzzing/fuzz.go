@@ -3,51 +3,28 @@ package qpack
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"reflect"
 
 	"github.com/quic-go/qpack"
 )
 
 func Fuzz(data []byte) int {
-	if len(data) < 1 {
-		return 0
-	}
-
-	chunkLen := int(data[0]) + 1
-	data = data[1:]
-
-	fields, err := qpack.NewDecoder(nil).DecodeFull(data)
-	if err != nil {
-		return 0
-	}
-	if len(fields) == 0 {
-		return 0
-	}
-
-	var writtenFields []qpack.HeaderField
-	decoder := qpack.NewDecoder(func(hf qpack.HeaderField) {
-		writtenFields = append(writtenFields, hf)
-	})
-	for len(data) > 0 {
-		var chunk []byte
-		if chunkLen <= len(data) {
-			chunk = data[:chunkLen]
-			data = data[chunkLen:]
-		} else {
-			chunk = data
-			data = nil
+	decoder := qpack.NewDecoder()
+	decode := decoder.Decode(data)
+	var fields []qpack.HeaderField
+	for {
+		hf, err := decode()
+		if err == io.EOF {
+			break
 		}
-		n, err := decoder.Write(chunk)
 		if err != nil {
 			return 0
 		}
-		if n != len(chunk) {
-			panic("len error")
-		}
+		fields = append(fields, hf)
 	}
-	if !reflect.DeepEqual(fields, writtenFields) {
-		fmt.Printf("%#v vs %#v", fields, writtenFields)
-		panic("Write() and DecodeFull() produced different results")
+	if len(fields) == 0 {
+		return 0
 	}
 
 	buf := &bytes.Buffer{}
@@ -61,10 +38,19 @@ func Fuzz(data []byte) int {
 		panic(err)
 	}
 
-	encodedFields, err := qpack.NewDecoder(nil).DecodeFull(buf.Bytes())
-	if err != nil {
-		fmt.Printf("Fields: %#v\n", fields)
-		panic(err)
+	decoder2 := qpack.NewDecoder()
+	decode2 := decoder2.Decode(buf.Bytes())
+	var encodedFields []qpack.HeaderField
+	for {
+		hf, err := decode2()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			fmt.Printf("Fields: %#v\n", fields)
+			panic(err)
+		}
+		encodedFields = append(encodedFields, hf)
 	}
 	if !reflect.DeepEqual(fields, encodedFields) {
 		fmt.Printf("%#v vs %#v", fields, encodedFields)

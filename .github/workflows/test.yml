@@ -22,7 +22,7 @@ jobs:
           GO: ${{ matrix.go }}
         with:
           files: coverage.txt
-          env_vars: OS
+          env_vars: GO
           token: ${{ secrets.CODECOV_TOKEN }}
   integration:
     strategy:

@@ -14,12 +14,15 @@ jobs:
           go-version: ${{ matrix.go }}
       - run: go version
       - name: Run tests
-        run: go test -v -cover -race -shuffle=on .
+        run: go test -v -cover -coverprofile coverage.txt -race -shuffle=on .
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@v5
+        env:
+          GO: ${{ matrix.go }}
         with:
           files: coverage.txt
-          env_vars: GO=${{ matrix.go }}
+          env_vars: GO
           token: ${{ secrets.CODECOV_TOKEN }}
   integration:
     strategy:

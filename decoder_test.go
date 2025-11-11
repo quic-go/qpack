@@ -294,18 +294,21 @@ func BenchmarkDecoder(b *testing.B) {
 func benchmarkDecoder(b *testing.B, data []byte, numExpected int) {
 	b.ReportAllocs()
 
-	var counter int
-	decoder := NewDecoder(func(HeaderField) { counter++ })
+	decoder := NewDecoder(func(HeaderField) {})
+	hdr := make(map[string]string)
 	for b.Loop() {
-		if _, err := decoder.Write(data); err != nil {
+		hfs, err := decoder.DecodeFull(data)
+		if err != nil {
 			b.Fatal(err)
 		}
-		if counter != numExpected {
-			b.Fatalf("expected %d header fields, got %d", numExpected, counter)
+		if len(hfs) != numExpected {
+			b.Fatalf("expected %d header fields, got %d", numExpected, len(hfs))
 		}
-		counter = 0
-		if err := decoder.Close(); err != nil {
-			b.Fatal(err)
+		// simulate what a typical HTTP/3 consumer would do with the header fields:
+		// populate an http.Header with the header fields
+		for _, hf := range hfs {
+			hdr[hf.Name] = hf.Value
 		}
+		clear(hfs)
 	}
 }

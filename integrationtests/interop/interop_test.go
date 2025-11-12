@@ -115,6 +115,9 @@ func findFiles() []string {
 			return nil
 		}
 		_, file := filepath.Split(path)
+		if file == "draft-examples.out" {
+			return nil
+		}
 		split := strings.Split(file, ".")
 		tableSize := split[len(split)-3]
 		if tableSize == "0" {

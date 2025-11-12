@@ -6,9 +6,11 @@ on:
     branches:
       - master
   pull_request:
+
 jobs:
   golangci:
     strategy:
+      fail-fast: false
       matrix:
         go: [ "1.24.x", "1.25.x" ]
     name: lint

@@ -27,8 +27,12 @@ func main() {
 			log.Fatalf("failed to decode input: %v", err)
 		}
 		fmt.Printf("\nRequest on stream %d:\n", in.streamID)
-		dec.Write(in.data)
-		dec.Close()
+		if _, err := dec.Write(in.data); err != nil {
+			log.Fatalf("failed to write to decoder: %v", err)
+		}
+		if err := dec.Close(); err != nil {
+			log.Fatalf("failed to close decoder: %v", err)
+		}
 	}
 }
 

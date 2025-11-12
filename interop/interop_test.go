@@ -162,22 +162,27 @@ func TestInteropDecodingEncodedFiles(t *testing.T) {
 			var numRequests, numHeaderFields int
 			require.NotEmpty(t, qif.requests)
 
-			var headers []qpack.HeaderField
-			decoder := qpack.NewDecoder(func(hf qpack.HeaderField) { headers = append(headers, hf) })
+			decoder := qpack.NewDecoder()
 
 			for _, req := range qif.requests {
 				_, data := parseInput(file)
 				require.NotNil(t, data)
 
-				_, err = decoder.Write(data)
-				require.NoError(t, err)
+				var headers []qpack.HeaderField
+				decode := decoder.Decode(data)
+				for {
+					hf, err := decode()
+					if err == io.EOF {
+						break
+					}
+					require.NoError(t, err)
+					headers = append(headers, hf)
+				}
 
 				require.Equal(t, req.headers, headers)
 
 				numRequests++
 				numHeaderFields += len(headers)
-				headers = nil
-				decoder.Close()
 			}
 
 			t.Logf("Decoded %d requests containing %d header fields.", len(qif.requests), numHeaderFields)

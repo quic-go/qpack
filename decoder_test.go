@@ -1,26 +1,13 @@
 package qpack
 
 import (
-	"bytes"
+	"io"
 	"testing"
 
 	"golang.org/x/net/http2/hpack"
 
 	"github.com/stretchr/testify/require"
 )
-
-type recordingDecoder struct {
-	*Decoder
-	headerFields []HeaderField
-}
-
-func newRecordingDecoder() *recordingDecoder {
-	decoder := &recordingDecoder{}
-	decoder.Decoder = NewDecoder(func(hf HeaderField) { decoder.headerFields = append(decoder.headerFields, hf) })
-	return decoder
-}
-
-func (decoder *recordingDecoder) Fields() []HeaderField { return decoder.headerFields }
 
 func insertPrefix(data []byte) []byte {
 	prefix := appendVarInt(nil, 8, 0)
@@ -53,7 +40,9 @@ func TestDecoderInvalidInputs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewDecoder(nil).Write(tt.input)
+			dec := NewDecoder()
+			decode := dec.Decode(tt.input)
+			_, err := decode()
 			require.EqualError(t, err, tt.expected)
 		})
 	}
@@ -142,31 +131,34 @@ var (
 )
 
 func TestDecoderLiteralHeaderFieldDynamicTable(t *testing.T) {
-	decoder := newRecordingDecoder()
 	data := appendVarInt(nil, 4, 49)
 	data[0] ^= 0x40 // don't set the static flag (0x10)
 	data = appendVarInt(data, 7, 6)
 	data = append(data, []byte("foobar")...)
-	_, err := decoder.Write(insertPrefix(data))
+	dec := NewDecoder()
+	decode := dec.Decode(insertPrefix(data))
+	_, err := decode()
 	require.ErrorIs(t, err, errNoDynamicTable)
 }
 
-func doPartialWrites(t *testing.T, decoder *recordingDecoder, data []byte) {
+func decodeAll(t *testing.T, decode func() (HeaderField, error)) []HeaderField {
 	t.Helper()
-	for i := 0; i < len(data)-1; i++ {
-		n, err := decoder.Write([]byte{data[i]})
+	var hfs []HeaderField
+	for {
+		hf, err := decode()
+		if err == io.EOF {
+			break
+		}
 		require.NoError(t, err)
-		require.Equal(t, 1, n)
+		hfs = append(hfs, hf)
 	}
-	n, err := decoder.Write([]byte{data[len(data)-1]})
-	require.NoError(t, err)
-	require.NotZero(t, n)
+	return hfs
 }
 
 func TestDecoderIndexedHeaderFields(t *testing.T) {
-	decoder := newRecordingDecoder()
-	doPartialWrites(t, decoder, indexedField.Data)
-	require.Equal(t, indexedField.Expected, decoder.Fields())
+	dec := NewDecoder()
+	decodeFn := dec.Decode(indexedField.Data)
+	require.Equal(t, indexedField.Expected, decodeAll(t, decodeFn))
 }
 
 func TestDecoderInvalidIndexedHeaderFields(t *testing.T) {
@@ -197,68 +189,24 @@ func TestDecoderInvalidIndexedHeaderFields(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			decoder := newRecordingDecoder()
-			_, err := decoder.Write(tt.input)
+			dec := NewDecoder()
+			decodeFn := dec.Decode(tt.input)
+			_, err := decodeFn()
 			require.EqualError(t, err, tt.expected)
-			require.Empty(t, decoder.Fields())
 		})
 	}
 }
 
 func TestDecoderLiteralHeaderFieldWithNameReferenceAndHuffmanEncoding(t *testing.T) {
-	decoder := newRecordingDecoder()
-	doPartialWrites(t, decoder, literalFieldWithHuffmanEncoding.Data)
-	require.Equal(t, literalFieldWithHuffmanEncoding.Expected, decoder.Fields())
+	dec := NewDecoder()
+	decodeFn := dec.Decode(literalFieldWithHuffmanEncoding.Data)
+	require.Equal(t, literalFieldWithHuffmanEncoding.Expected, decodeAll(t, decodeFn))
 }
 
 func TestDecoderLiteralHeaderFieldWithoutNameReference(t *testing.T) {
-	decoder := newRecordingDecoder()
-	doPartialWrites(t, decoder, literalFieldWithoutNameReference.Data)
-	require.Equal(t, literalFieldWithoutNameReference.Expected, decoder.Fields())
-}
-
-func TestDecodeFull(t *testing.T) {
-	// decode nothing
-	data, err := NewDecoder(nil).DecodeFull([]byte{})
-	require.NoError(t, err)
-	require.Empty(t, data)
-
-	// decode a few entries
-	buf := &bytes.Buffer{}
-	enc := NewEncoder(buf)
-	require.NoError(t, enc.WriteField(HeaderField{Name: "foo", Value: "bar"}))
-	require.NoError(t, enc.WriteField(HeaderField{Name: "lorem", Value: "ipsum"}))
-	data, err = NewDecoder(nil).DecodeFull(buf.Bytes())
-	require.NoError(t, err)
-	require.Equal(t, []HeaderField{
-		{Name: "foo", Value: "bar"},
-		{Name: "lorem", Value: "ipsum"},
-	}, data)
-}
-
-func TestDecodeFullIncompleteData(t *testing.T) {
-	buf := &bytes.Buffer{}
-	enc := NewEncoder(buf)
-	require.NoError(t, enc.WriteField(HeaderField{Name: "foo", Value: "bar"}))
-	_, err := NewDecoder(nil).DecodeFull(buf.Bytes()[:buf.Len()-2])
-	require.EqualError(t, err, "decoding error: truncated headers")
-}
-
-func TestDecodeFullRestoresEmitFunc(t *testing.T) {
-	var emitFuncCalled bool
-	emitFunc := func(HeaderField) {
-		emitFuncCalled = true
-	}
-	decoder := NewDecoder(emitFunc)
-	buf := &bytes.Buffer{}
-	enc := NewEncoder(buf)
-	require.NoError(t, enc.WriteField(HeaderField{Name: "foo", Value: "bar"}))
-	_, err := decoder.DecodeFull(buf.Bytes())
-	require.NoError(t, err)
-	require.False(t, emitFuncCalled)
-	_, err = decoder.Write(buf.Bytes())
-	require.NoError(t, err)
-	require.True(t, emitFuncCalled)
+	dec := NewDecoder()
+	decodeFn := dec.Decode(literalFieldWithoutNameReference.Data)
+	require.Equal(t, literalFieldWithoutNameReference.Expected, decodeAll(t, decodeFn))
 }
 
 func BenchmarkDecoder(b *testing.B) {
@@ -294,21 +242,25 @@ func BenchmarkDecoder(b *testing.B) {
 func benchmarkDecoder(b *testing.B, data []byte, numExpected int) {
 	b.ReportAllocs()
 
-	decoder := NewDecoder(func(HeaderField) {})
+	decoder := NewDecoder()
 	hdr := make(map[string]string)
 	for b.Loop() {
-		hfs, err := decoder.DecodeFull(data)
-		if err != nil {
-			b.Fatal(err)
-		}
-		if len(hfs) != numExpected {
-			b.Fatalf("expected %d header fields, got %d", numExpected, len(hfs))
-		}
-		// simulate what a typical HTTP/3 consumer would do with the header fields:
-		// populate an http.Header with the header fields
-		for _, hf := range hfs {
+		decodeFn := decoder.Decode(data)
+		for {
+			hf, err := decodeFn()
+			if err != nil {
+				if err == io.EOF {
+					break
+				}
+				b.Fatalf("unexpected error: %v", err)
+			}
+			// simulate what a typical HTTP/3 consumer would do with the header fields:
+			// populate an http.Header with the header fields
 			hdr[hf.Name] = hf.Value
 		}
-		clear(hfs)
+		if len(hdr) != numExpected {
+			b.Fatalf("expected %d header fields, got %d", numExpected, len(hdr))
+		}
+		clear(hdr)
 	}
 }

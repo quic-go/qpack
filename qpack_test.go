@@ -3,6 +3,7 @@ package qpack_test
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"testing"
 	_ "unsafe" // for go:linkname
@@ -35,6 +36,23 @@ func getEncoder() (*qpack.Encoder, *bytes.Buffer) {
 	return qpack.NewEncoder(output), output
 }
 
+func decodeAll(t *testing.T, data []byte) []qpack.HeaderField {
+	t.Helper()
+
+	decoder := qpack.NewDecoder()
+	decode := decoder.Decode(data)
+	var hfs []qpack.HeaderField
+	for {
+		hf, err := decode()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		hfs = append(hfs, hf)
+	}
+	return hfs
+}
+
 func TestEncodeDecode(t *testing.T) {
 	hfs := []qpack.HeaderField{
 		{Name: "foo", Value: "bar"},
@@ -45,8 +63,7 @@ func TestEncodeDecode(t *testing.T) {
 	for _, hf := range hfs {
 		require.NoError(t, encoder.WriteField(hf))
 	}
-	headerFields, err := qpack.NewDecoder(nil).DecodeFull(output.Bytes())
-	require.NoError(t, err)
+	headerFields := decodeAll(t, output.Bytes())
 	require.Equal(t, hfs, headerFields)
 }
 
@@ -67,8 +84,7 @@ func replaceRandomCharacter(s string) string {
 func check(t *testing.T, encoded []byte, hf qpack.HeaderField) {
 	t.Helper()
 
-	headerFields, err := qpack.NewDecoder(nil).DecodeFull(encoded)
-	require.NoError(t, err)
+	headerFields := decodeAll(t, encoded)
 	require.Len(t, headerFields, 1)
 	require.Equal(t, hf, headerFields[0])
 }

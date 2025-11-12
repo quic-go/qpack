@@ -17,7 +17,7 @@ func main() {
 		log.Fatalf("failed to open file: %v", err)
 	}
 
-	dec := qpack.NewDecoder(func(hf qpack.HeaderField) { fmt.Printf("%#v\n", hf) })
+	dec := qpack.NewDecoder()
 	for {
 		in, err := decodeInput(file)
 		if err != nil {
@@ -27,11 +27,16 @@ func main() {
 			log.Fatalf("failed to decode input: %v", err)
 		}
 		fmt.Printf("\nRequest on stream %d:\n", in.streamID)
-		if _, err := dec.Write(in.data); err != nil {
-			log.Fatalf("failed to write to decoder: %v", err)
-		}
-		if err := dec.Close(); err != nil {
-			log.Fatalf("failed to close decoder: %v", err)
+		decode := dec.Decode(in.data)
+		for {
+			hf, err := decode()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				log.Fatalf("failed to decode header field: %v", err)
+			}
+			fmt.Printf("%#v\n", hf)
 		}
 	}
 }

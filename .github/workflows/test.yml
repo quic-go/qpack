@@ -3,6 +3,7 @@ on: [ push, pull_request ]
 jobs:
   unit:
     strategy:
+      fail-fast: false
       matrix:
         go: [ "1.24.x", "1.25.x" ]
     runs-on: ubuntu-latest
@@ -26,6 +27,7 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
   integration:
     strategy:
+      fail-fast: false
       matrix:
         go: [ "1.24.x", "1.25.x" ]
     runs-on: ubuntu-latest

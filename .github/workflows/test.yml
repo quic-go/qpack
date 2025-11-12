@@ -18,6 +18,8 @@ jobs:
         run: go run example/main.go
       - name: Run tests
         run: go test -v -cover -coverprofile coverage.txt -race -shuffle=on .
+      - name: Run interop tests
+        run: go test -shuffle=on -v ./interop
       - name: Upload coverage to Codecov
         if: ${{ !cancelled() }}
         uses: codecov/codecov-action@v5
@@ -27,25 +29,3 @@ jobs:
           files: coverage.txt
           env_vars: GO
           token: ${{ secrets.CODECOV_TOKEN }}
-  integration:
-    strategy:
-      fail-fast: false
-      matrix:
-        go: [ "1.24.x", "1.25.x" ]
-    runs-on: ubuntu-latest
-    name: Integration tests (Go ${{ matrix.go }})
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          submodules: 'recursive'
-      - uses: actions/setup-go@v6
-        with: 
-          go-version: ${{ matrix.go }}
-      - run: go version
-      - name: Run interop tests
-        run: go test -v ./integrationtests/interop/
-      - name: Run integration tests
-        run: |
-          for i in {1..25}; do
-            go test -v -race -shuffle=on ./integrationtests/self
-          done

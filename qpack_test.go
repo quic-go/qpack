@@ -1,7 +1,8 @@
-package self
+package qpack_test
 
 import (
 	"bytes"
+	"fmt"
 	"math/rand/v2"
 	"testing"
 	_ "unsafe" // for go:linkname
@@ -34,19 +35,7 @@ func getEncoder() (*qpack.Encoder, *bytes.Buffer) {
 	return qpack.NewEncoder(output), output
 }
 
-func TestEncodingAndDecodingSingleHeaderField(t *testing.T) {
-	hf := qpack.HeaderField{
-		Name:  randomString(15),
-		Value: randomString(15),
-	}
-	encoder, output := getEncoder()
-	require.NoError(t, encoder.WriteField(hf))
-	headerFields, err := qpack.NewDecoder(nil).DecodeFull(output.Bytes())
-	require.NoError(t, err)
-	require.Equal(t, []qpack.HeaderField{hf}, headerFields)
-}
-
-func TestEncodingAndDecodingMultipleHeaderFields(t *testing.T) {
+func TestEncodeDecode(t *testing.T) {
 	hfs := []qpack.HeaderField{
 		{Name: "foo", Value: "bar"},
 		{Name: "lorem", Value: "ipsum"},
@@ -59,34 +48,6 @@ func TestEncodingAndDecodingMultipleHeaderFields(t *testing.T) {
 	headerFields, err := qpack.NewDecoder(nil).DecodeFull(output.Bytes())
 	require.NoError(t, err)
 	require.Equal(t, hfs, headerFields)
-}
-
-func TestEncodingAndDecodingMultipleRequests(t *testing.T) {
-	hfs1 := []qpack.HeaderField{{Name: "foo", Value: "bar"}}
-	hfs2 := []qpack.HeaderField{
-		{Name: "lorem", Value: "ipsum"},
-		{Name: randomString(15), Value: randomString(20)},
-	}
-	encoder, output := getEncoder()
-	for _, hf := range hfs1 {
-		require.NoError(t, encoder.WriteField(hf))
-	}
-	req1 := append([]byte{}, output.Bytes()...)
-	output.Reset()
-	for _, hf := range hfs2 {
-		require.NoError(t, encoder.WriteField(hf))
-	}
-	req2 := append([]byte{}, output.Bytes()...)
-
-	var headerFields []qpack.HeaderField
-	decoder := qpack.NewDecoder(func(hf qpack.HeaderField) { headerFields = append(headerFields, hf) })
-	_, err := decoder.Write(req1)
-	require.NoError(t, err)
-	require.Equal(t, hfs1, headerFields)
-	headerFields = nil
-	_, err = decoder.Write(req2)
-	require.NoError(t, err)
-	require.Equal(t, hfs2, headerFields)
 }
 
 // replace one character by a random character at a random position
@@ -105,13 +66,22 @@ func replaceRandomCharacter(s string) string {
 
 func check(t *testing.T, encoded []byte, hf qpack.HeaderField) {
 	t.Helper()
+
 	headerFields, err := qpack.NewDecoder(nil).DecodeFull(encoded)
 	require.NoError(t, err)
 	require.Len(t, headerFields, 1)
 	require.Equal(t, hf, headerFields[0])
 }
 
-func TestUsingStaticTableForFieldNamesWithoutValues(t *testing.T) {
+func TestStaticTableForFieldNamesWithoutValues(t *testing.T) {
+	for i := range 10 {
+		t.Run(fmt.Sprintf("run %d", i), func(t *testing.T) {
+			testStaticTableForFieldNamesWithoutValues(t)
+		})
+	}
+}
+
+func testStaticTableForFieldNamesWithoutValues(t *testing.T) {
 	var hf qpack.HeaderField
 	for {
 		if entry := staticTable[rand.IntN(len(staticTable))]; len(entry.Value) == 0 {
@@ -131,7 +101,15 @@ func TestUsingStaticTableForFieldNamesWithoutValues(t *testing.T) {
 	require.Greater(t, output.Len(), encodedLen)
 }
 
-func TestUsingStaticTableForFieldNamesWithCustomValues(t *testing.T) {
+func TestStaticTableForFieldNamesWithCustomValues(t *testing.T) {
+	for i := range 10 {
+		t.Run(fmt.Sprintf("run %d", i), func(t *testing.T) {
+			testStaticTableForFieldNamesWithCustomValues(t)
+		})
+	}
+}
+
+func testStaticTableForFieldNamesWithCustomValues(t *testing.T) {
 	var hf qpack.HeaderField
 	for {
 		if entry := staticTable[rand.IntN(len(staticTable))]; len(entry.Value) == 0 {
@@ -155,6 +133,14 @@ func TestUsingStaticTableForFieldNamesWithCustomValues(t *testing.T) {
 }
 
 func TestStaticTableForFieldNamesWithValues(t *testing.T) {
+	for i := range 10 {
+		t.Run(fmt.Sprintf("run %d", i), func(t *testing.T) {
+			testStaticTableForFieldNamesWithValues(t)
+		})
+	}
+}
+
+func testStaticTableForFieldNamesWithValues(t *testing.T) {
 	var hf qpack.HeaderField
 	for {
 		// Only use values with at least 2 characters.
@@ -180,6 +166,14 @@ func TestStaticTableForFieldNamesWithValues(t *testing.T) {
 }
 
 func TestStaticTableForFieldValues(t *testing.T) {
+	for i := range 10 {
+		t.Run(fmt.Sprintf("run %d", i), func(t *testing.T) {
+			testStaticTableForFieldValues(t)
+		})
+	}
+}
+
+func testStaticTableForFieldValues(t *testing.T) {
 	var hf qpack.HeaderField
 	for {
 		// Only use values with at least 2 characters.

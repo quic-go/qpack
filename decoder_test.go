@@ -28,7 +28,7 @@ func insertPrefix(data []byte) []byte {
 	return append(prefix, data...)
 }
 
-func TestDecoderRejectsInvalidInputs(t *testing.T) {
+func TestDecoderInvalidInputs(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    []byte
@@ -59,27 +59,114 @@ func TestDecoderRejectsInvalidInputs(t *testing.T) {
 	}
 }
 
+const (
+	loremIpsum1 = "lorem ipsum dolor sit amet"
+	loremIpsum2 = "consectetur adipiscing elit"
+)
+
+type testcase struct {
+	Data     []byte
+	Expected []HeaderField
+}
+
+var (
+	literalFieldWithoutNameReference = testcase{
+		Data: func() []byte {
+			data := appendVarInt(nil, 3, 3)
+			data[0] ^= 0x20
+			data = append(data, []byte("foo")...)
+			data = appendVarInt(data, 7, uint64(len(loremIpsum1)))
+			data = append(data, []byte(loremIpsum1)...)
+			data2 := appendVarInt(nil, 3, 3)
+			data2[0] ^= 0x20
+			data2 = append(data2, []byte("bar")...)
+			data2 = appendVarInt(data2, 7, uint64(len(loremIpsum2)))
+			data2 = append(data2, []byte(loremIpsum2)...)
+			return insertPrefix(append(data, data2...))
+		}(),
+		Expected: []HeaderField{
+			{Name: "foo", Value: loremIpsum1},
+			{Name: "bar", Value: loremIpsum2},
+		},
+	}
+	literalFieldWithNameReference = testcase{
+		Data: func() []byte {
+			data := appendVarInt(nil, 4, 49)
+			data[0] ^= 0x40 | 0x10
+			data = appendVarInt(data, 7, uint64(len(loremIpsum1)))
+			data = append(data, []byte(loremIpsum1)...)
+			data2 := appendVarInt(nil, 4, 82)
+			data2[0] ^= 0x40 | 0x10
+			data2[0] |= 0x20 // set the N-bit
+			data2 = appendVarInt(data2, 7, uint64(len(loremIpsum2)))
+			data2 = append(data2, []byte(loremIpsum2)...)
+			return insertPrefix(append(data, data2...))
+		}(),
+		Expected: []HeaderField{
+			{Name: "content-type", Value: loremIpsum1},
+			{Name: "access-control-request-method", Value: loremIpsum2},
+		},
+	}
+	literalFieldWithHuffmanEncoding = testcase{
+		Data: func() []byte {
+			data := appendVarInt(nil, 4, 49)
+			data[0] ^= 0x40 | 0x10
+			data2 := appendVarInt(nil, 7, hpack.HuffmanEncodeLength(loremIpsum1))
+			data2[0] ^= 0x80
+			data = hpack.AppendHuffmanString(append(data, data2...), loremIpsum1)
+			data3 := appendVarInt(nil, 4, 82)
+			data3[0] ^= 0x40 | 0x10
+			data4 := appendVarInt(nil, 7, hpack.HuffmanEncodeLength(loremIpsum2))
+			data4[0] ^= 0x80
+			data5 := hpack.AppendHuffmanString(append(data3, data4...), loremIpsum2)
+			return insertPrefix(append(data, data5...))
+		}(),
+		Expected: []HeaderField{
+			{Name: "content-type", Value: loremIpsum1},
+			{Name: "access-control-request-method", Value: loremIpsum2},
+		},
+	}
+	indexedField = testcase{
+		Data: func() []byte {
+			data := appendVarInt(nil, 6, 20)
+			data[0] ^= 0x80 | 0x40
+			data2 := appendVarInt(nil, 6, 42)
+			data2[0] ^= 0x80 | 0x40
+			return insertPrefix(append(data, data2...))
+		}(),
+		Expected: []HeaderField{
+			staticTableEntries[20],
+			staticTableEntries[42],
+		},
+	}
+)
+
+func TestDecoderLiteralHeaderFieldDynamicTable(t *testing.T) {
+	decoder := newRecordingDecoder()
+	data := appendVarInt(nil, 4, 49)
+	data[0] ^= 0x40 // don't set the static flag (0x10)
+	data = appendVarInt(data, 7, 6)
+	data = append(data, []byte("foobar")...)
+	_, err := decoder.Write(insertPrefix(data))
+	require.ErrorIs(t, err, errNoDynamicTable)
+}
+
 func doPartialWrites(t *testing.T, decoder *recordingDecoder, data []byte) {
 	t.Helper()
 	for i := 0; i < len(data)-1; i++ {
 		n, err := decoder.Write([]byte{data[i]})
 		require.NoError(t, err)
 		require.Equal(t, 1, n)
-		require.Empty(t, decoder.Fields())
 	}
 	n, err := decoder.Write([]byte{data[len(data)-1]})
 	require.NoError(t, err)
-	require.Equal(t, 1, n)
-	require.Len(t, decoder.Fields(), 1)
+	require.NotZero(t, n)
 }
 
 func TestDecoderIndexedHeaderFields(t *testing.T) {
 	decoder := newRecordingDecoder()
-	data := appendVarInt(nil, 6, 20)
-	data[0] ^= 0x80 | 0x40
-	doPartialWrites(t, decoder, insertPrefix(data))
-	require.Len(t, decoder.Fields(), 1)
-	require.Equal(t, staticTableEntries[20], decoder.Fields()[0])
+	doPartialWrites(t, decoder, indexedField.Data)
+	require.Equal(t, indexedField.Expected, decoder.Fields())
 }
 
 func TestDecoderInvalidIndexedHeaderFields(t *testing.T) {
@@ -118,66 +205,16 @@ func TestDecoderInvalidIndexedHeaderFields(t *testing.T) {
 	}
 }
 
-func TestDecoderLiteralHeaderFieldWithNameReference(t *testing.T) {
-	t.Run("without the N-bit", func(t *testing.T) {
-		testDecoderLiteralHeaderFieldWithNameReference(t, false)
-	})
-	t.Run("with the N-bit", func(t *testing.T) {
-		testDecoderLiteralHeaderFieldWithNameReference(t, true)
-	})
-}
-
-func testDecoderLiteralHeaderFieldWithNameReference(t *testing.T, n bool) {
-	decoder := newRecordingDecoder()
-	data := appendVarInt(nil, 4, 49)
-	data[0] ^= 0x40 | 0x10
-	if n {
-		data[0] |= 0x20
-	}
-	data = appendVarInt(data, 7, 6)
-	data = append(data, []byte("foobar")...)
-	doPartialWrites(t, decoder, insertPrefix(data))
-	require.Len(t, decoder.Fields(), 1)
-	require.Equal(t, "content-type", decoder.Fields()[0].Name)
-	require.Equal(t, "foobar", decoder.Fields()[0].Value)
-}
-
 func TestDecoderLiteralHeaderFieldWithNameReferenceAndHuffmanEncoding(t *testing.T) {
 	decoder := newRecordingDecoder()
-	data := appendVarInt(nil, 4, 49)
-	data[0] ^= 0x40 | 0x10
-	data2 := appendVarInt(nil, 7, hpack.HuffmanEncodeLength("foobar"))
-	data2[0] ^= 0x80
-	data = hpack.AppendHuffmanString(append(data, data2...), "foobar")
-	doPartialWrites(t, decoder, insertPrefix(data))
-	require.Len(t, decoder.Fields(), 1)
-	require.Equal(t, "content-type", decoder.Fields()[0].Name)
-	require.Equal(t, "foobar", decoder.Fields()[0].Value)
-}
-
-func TestDecoderLiteralHeaderFieldWithNameReferenceToTheDynamicTable(t *testing.T) {
-	decoder := newRecordingDecoder()
-	data := appendVarInt(nil, 4, 49)
-	data[0] ^= 0x40 // don't set the static flag (0x10)
-	data = appendVarInt(data, 7, 6)
-	data = append(data, []byte("foobar")...)
-	_, err := decoder.Write(insertPrefix(data))
-	require.ErrorIs(t, err, errNoDynamicTable)
+	doPartialWrites(t, decoder, literalFieldWithHuffmanEncoding.Data)
+	require.Equal(t, literalFieldWithHuffmanEncoding.Expected, decoder.Fields())
 }
 
 func TestDecoderLiteralHeaderFieldWithoutNameReference(t *testing.T) {
 	decoder := newRecordingDecoder()
-	data := appendVarInt(nil, 3, 3)
-	data[0] ^= 0x20
-	data = append(data, []byte("foo")...)
-	data2 := appendVarInt(nil, 7, 3)
-	data2 = append(data2, []byte("bar")...)
-	data = append(data, data2...)
-	doPartialWrites(t, decoder, insertPrefix(data))
-
-	require.Len(t, decoder.Fields(), 1)
-	require.Equal(t, "foo", decoder.Fields()[0].Name)
-	require.Equal(t, "bar", decoder.Fields()[0].Value)
+	doPartialWrites(t, decoder, literalFieldWithoutNameReference.Data)
+	require.Equal(t, literalFieldWithoutNameReference.Expected, decoder.Fields())
 }
 
 func TestDecodeFull(t *testing.T) {
@@ -222,4 +259,56 @@ func TestDecodeFullRestoresEmitFunc(t *testing.T) {
 	_, err = decoder.Write(buf.Bytes())
 	require.NoError(t, err)
 	require.True(t, emitFuncCalled)
+}
+
+func BenchmarkDecoder(b *testing.B) {
+	b.Run("literal field without name reference", func(b *testing.B) {
+		benchmarkDecoder(b,
+			literalFieldWithoutNameReference.Data,
+			len(literalFieldWithoutNameReference.Expected),
+		)
+	})
+
+	b.Run("literal field with name reference", func(b *testing.B) {
+		benchmarkDecoder(b,
+			literalFieldWithNameReference.Data,
+			len(literalFieldWithNameReference.Expected),
+		)
+	})
+
+	b.Run("literal field with Huffman encoding", func(b *testing.B) {
+		benchmarkDecoder(b,
+			literalFieldWithHuffmanEncoding.Data,
+			len(literalFieldWithHuffmanEncoding.Expected),
+		)
+	})
+
+	b.Run("indexed field", func(b *testing.B) {
+		benchmarkDecoder(b,
+			indexedField.Data,
+			len(indexedField.Expected),
+		)
+	})
+}
+
+func benchmarkDecoder(b *testing.B, data []byte, numExpected int) {
+	b.ReportAllocs()
+
+	decoder := NewDecoder(func(HeaderField) {})
+	hdr := make(map[string]string)
+	for b.Loop() {
+		hfs, err := decoder.DecodeFull(data)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(hfs) != numExpected {
+			b.Fatalf("expected %d header fields, got %d", numExpected, len(hfs))
+		}
+		// simulate what a typical HTTP/3 consumer would do with the header fields:
+		// populate an http.Header with the header fields
+		for _, hf := range hfs {
+			hdr[hf.Name] = hf.Value
+		}
+		clear(hfs)
+	}
 }

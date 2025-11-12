@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 
 	"github.com/quic-go/qpack"
@@ -13,22 +14,26 @@ import (
 func main() {
 	file, err := os.Open("example/fb-req-hq.out.0.0.0")
 	if err != nil {
-		panic(err)
+		log.Fatalf("failed to open file: %v", err)
 	}
 
-	dec := qpack.NewDecoder(emitFunc)
+	dec := qpack.NewDecoder(func(hf qpack.HeaderField) { fmt.Printf("%#v\n", hf) })
 	for {
 		in, err := decodeInput(file)
 		if err != nil {
-			panic(err)
+			if err == io.EOF {
+				break
+			}
+			log.Fatalf("failed to decode input: %v", err)
 		}
 		fmt.Printf("\nRequest on stream %d:\n", in.streamID)
-		dec.Write(in.data)
+		if _, err := dec.Write(in.data); err != nil {
+			log.Fatalf("failed to write to decoder: %v", err)
+		}
+		if err := dec.Close(); err != nil {
+			log.Fatalf("failed to close decoder: %v", err)
+		}
 	}
-}
-
-func emitFunc(hf qpack.HeaderField) {
-	fmt.Printf("%#v\n", hf)
 }
 
 type input struct {
@@ -39,11 +44,14 @@ type input struct {
 func decodeInput(r io.Reader) (*input, error) {
 	prefix := make([]byte, 12)
 	if _, err := io.ReadFull(r, prefix); err != nil {
-		return nil, errors.New("insufficient data for prefix")
+		if err == io.EOF {
+			return nil, io.EOF
+		}
+		return nil, fmt.Errorf("insufficient data for prefix: %w", err)
 	}
 	streamID := binary.BigEndian.Uint64(prefix[:8])
 	length := binary.BigEndian.Uint32(prefix[8:12])
-	if length > (1 << 15) {
+	if length > 1<<15 {
 		return nil, errors.New("input too long")
 	}
 	data := make([]byte, int(length))

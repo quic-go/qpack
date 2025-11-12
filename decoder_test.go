@@ -24,12 +24,12 @@ func TestDecoderInvalidInputs(t *testing.T) {
 		{
 			name:     "non-zero required insert count", // we don't support dynamic table updates
 			input:    append(appendVarInt(nil, 8, 1), appendVarInt(nil, 7, 0)...),
-			expected: "decoding error: expected Required Insert Count to be zero",
+			expected: "expected Required Insert Count to be zero",
 		},
 		{
 			name:     "non-zero delta base", // we don't support dynamic table updates
 			input:    append(appendVarInt(nil, 8, 0), appendVarInt(nil, 7, 1)...),
-			expected: "decoding error: expected Base to be zero",
+			expected: "expected Base to be zero",
 		},
 		{
 			name:     "unknown type byte",
@@ -174,7 +174,7 @@ func TestDecoderInvalidIndexedHeaderFields(t *testing.T) {
 				data[0] ^= 0x80 | 0x40
 				return insertPrefix(data)
 			}(),
-			expected: "decoding error: invalid indexed representation index 10000",
+			expected: "invalid indexed representation index 10000",
 		},
 		{
 			name: "rejects an indexed header field that references the dynamic table",
@@ -207,6 +207,58 @@ func TestDecoderLiteralHeaderFieldWithoutNameReference(t *testing.T) {
 	dec := NewDecoder()
 	decodeFn := dec.Decode(literalFieldWithoutNameReference.Data)
 	require.Equal(t, literalFieldWithoutNameReference.Expected, decodeAll(t, decodeFn))
+}
+
+func TestDecoderEOF(t *testing.T) {
+	t.Run("literal field without name reference", func(t *testing.T) {
+		testDecoderEOF(t,
+			literalFieldWithoutNameReference.Data,
+			len(literalFieldWithoutNameReference.Expected),
+		)
+	})
+
+	t.Run("literal field with name reference", func(t *testing.T) {
+		testDecoderEOF(t,
+			literalFieldWithNameReference.Data,
+			len(literalFieldWithNameReference.Expected),
+		)
+	})
+
+	t.Run("literal field with Huffman encoding", func(t *testing.T) {
+		testDecoderEOF(t,
+			literalFieldWithHuffmanEncoding.Data,
+			len(literalFieldWithHuffmanEncoding.Expected),
+		)
+	})
+
+	t.Run("indexed field", func(t *testing.T) {
+		testDecoderEOF(t,
+			indexedField.Data,
+			len(indexedField.Expected),
+		)
+	})
+}
+
+func testDecoderEOF(t *testing.T, data []byte, numExpected int) {
+	for i := range data {
+		dec := NewDecoder()
+		decodeFn := dec.Decode(data[:i])
+		var hfs []HeaderField
+		for {
+			hf, err := decodeFn()
+			// the data might have been cut right after a header field,
+			// which is a valid header
+			if err == io.EOF {
+				require.Less(t, len(hfs), numExpected)
+				break
+			}
+			if err != nil {
+				require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+				break
+			}
+			hfs = append(hfs, hf)
+		}
+	}
 }
 
 func BenchmarkDecoder(b *testing.B) {

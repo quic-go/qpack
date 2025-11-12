@@ -8,15 +8,6 @@ import (
 	"golang.org/x/net/http2/hpack"
 )
 
-// A decodingError represents a QPACK decoding error as defined by the specification
-type decodingError struct {
-	err error
-}
-
-func (de decodingError) Error() string {
-	return fmt.Sprintf("decoding error: %v", de.err)
-}
-
 // An invalidIndexError is returned when decoding encounters an invalid index
 // (e.g., an index that is out of bounds for the static table).
 type invalidIndexError int
@@ -25,7 +16,7 @@ func (e invalidIndexError) Error() string {
 	return fmt.Sprintf("invalid indexed representation index %d", int(e))
 }
 
-var errNoDynamicTable = decodingError{errors.New("no dynamic table")}
+var errNoDynamicTable = errors.New("no dynamic table")
 
 // A Decoder decodes QPACK header blocks.
 // A Decoder can be reused to decode multiple header blocks on different streams
@@ -59,7 +50,7 @@ func (d *Decoder) Decode(p []byte) DecodeFunc {
 			p = rest
 			readRequiredInsertCount = true
 			if requiredInsertCount != 0 {
-				return HeaderField{}, decodingError{errors.New("expected Required Insert Count to be zero")}
+				return HeaderField{}, errors.New("expected Required Insert Count to be zero")
 			}
 		}
 
@@ -71,7 +62,7 @@ func (d *Decoder) Decode(p []byte) DecodeFunc {
 			p = rest
 			readDeltaBase = true
 			if base != 0 {
-				return HeaderField{}, decodingError{errors.New("expected Base to be zero")}
+				return HeaderField{}, errors.New("expected Base to be zero")
 			}
 		}
 
@@ -111,7 +102,7 @@ func (d *Decoder) parseIndexedHeaderField(buf []byte) (_ HeaderField, rest []byt
 	}
 	hf, ok := d.at(index)
 	if !ok {
-		return HeaderField{}, buf, decodingError{invalidIndexError(index)}
+		return HeaderField{}, buf, invalidIndexError(index)
 	}
 	return hf, rest, nil
 }
@@ -130,11 +121,11 @@ func (d *Decoder) parseLiteralHeaderField(buf []byte) (_ HeaderField, rest []byt
 	}
 	hf, ok := d.at(index)
 	if !ok {
-		return HeaderField{}, buf, decodingError{invalidIndexError(index)}
+		return HeaderField{}, buf, invalidIndexError(index)
 	}
 	buf = rest
 	if len(buf) == 0 {
-		return HeaderField{}, buf, decodingError{errors.New("truncated literal header field")}
+		return HeaderField{}, buf, io.ErrUnexpectedEOF
 	}
 	usesHuffman := buf[0]&0x80 > 0
 	val, rest, err := d.readString(rest, 7, usesHuffman)
@@ -153,7 +144,7 @@ func (d *Decoder) parseLiteralHeaderFieldWithoutNameReference(buf []byte) (_ Hea
 	}
 	buf = rest
 	if len(buf) == 0 {
-		return HeaderField{}, rest, decodingError{errors.New("truncated literal header field without name reference")}
+		return HeaderField{}, rest, io.ErrUnexpectedEOF
 	}
 	usesHuffmanForVal := buf[0]&0x80 > 0
 	val, rest, err := d.readString(buf, 7, usesHuffmanForVal)
@@ -169,7 +160,7 @@ func (d *Decoder) readString(buf []byte, n uint8, usesHuffman bool) (string, []b
 		return "", nil, err
 	}
 	if uint64(len(buf)) < l {
-		return "", nil, decodingError{errors.New("truncated string")}
+		return "", nil, io.ErrUnexpectedEOF
 	}
 	var val string
 	if usesHuffman {

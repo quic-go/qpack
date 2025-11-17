@@ -6,7 +6,7 @@
 
 This is a minimal QPACK ([RFC 9204](https://datatracker.ietf.org/doc/html/rfc9204)) implementation in Go. It reuses the Huffman encoder / decoder code from the [HPACK implementation in the Go standard library](https://github.com/golang/net/tree/master/http2/hpack).
 
-It is fully interoperable with other QPACK implementations (both encoders and decoders). However, it currently does not support creating a compression dictionary using the dynamic table, which would allow for achieving higher compression efficiency. If you're interested in dynamic table support, please comment on [issue #33](https://github.com/quic-go/qpack/issues/33).
+It is fully interoperable with other QPACK implementations (both encoders and decoders). However, it does not support the dynamic table and relies solely on the static table and string literals (including Huffman encoding), which limits compression efficiency. If you're interested in dynamic table support, please comment on [issue #33](https://github.com/quic-go/qpack/issues/33).
 
 ## Running the Interop Tests
 

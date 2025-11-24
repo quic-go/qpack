@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     name: Unit tests (Go ${{ matrix.go }})
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
       - uses: actions/setup-go@v6

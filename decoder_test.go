@@ -22,19 +22,13 @@ func TestDecoderInvalidInputs(t *testing.T) {
 		expected string
 	}{
 		{
-			name:     "non-zero required insert count", // we don't support dynamic table updates
-			input:    append(appendVarInt(nil, 8, 1), appendVarInt(nil, 7, 0)...),
-			expected: "expected Required Insert Count to be zero",
-		},
-		{
-			name:     "non-zero delta base", // we don't support dynamic table updates
-			input:    append(appendVarInt(nil, 8, 0), appendVarInt(nil, 7, 1)...),
-			expected: "expected Base to be zero",
-		},
-		{
-			name:     "unknown type byte",
-			input:    insertPrefix([]byte{0x10}),
-			expected: "unexpected type byte: 0x10",
+			name: "invalid static table index",
+			input: func() []byte {
+				data := appendVarInt(nil, 6, 10000)
+				data[0] ^= 0x80 | 0x40
+				return insertPrefix(data)
+			}(),
+			expected: "invalid indexed representation index 10000",
 		},
 	}
 
@@ -131,6 +125,8 @@ var (
 )
 
 func TestDecoderLiteralHeaderFieldDynamicTable(t *testing.T) {
+	// When referencing a dynamic table entry that doesn't exist,
+	// we should get an invalid index error
 	data := appendVarInt(nil, 4, 49)
 	data[0] ^= 0x40 // don't set the static flag (0x10)
 	data = appendVarInt(data, 7, 6)
@@ -138,7 +134,9 @@ func TestDecoderLiteralHeaderFieldDynamicTable(t *testing.T) {
 	dec := NewDecoder()
 	decode := dec.Decode(insertPrefix(data))
 	_, err := decode()
-	require.ErrorIs(t, err, errNoDynamicTable)
+	// With dynamic table support, we get invalid index since the table is empty
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid indexed representation index")
 }
 
 func decodeAll(t *testing.T, decode func() (HeaderField, error)) []HeaderField {
@@ -177,13 +175,13 @@ func TestDecoderInvalidIndexedHeaderFields(t *testing.T) {
 			expected: "invalid indexed representation index 10000",
 		},
 		{
-			name: "rejects an indexed header field that references the dynamic table",
+			name: "errors when a non-existent dynamic table entry is referenced",
 			input: func() []byte {
 				data := appendVarInt(nil, 6, 20)
 				data[0] ^= 0x80 // don't set the static flag (0x40)
 				return insertPrefix(data)
 			}(),
-			expected: errNoDynamicTable.Error(),
+			expected: "invalid indexed representation index 20",
 		},
 	}
 
@@ -259,6 +257,110 @@ func testDecoderEOF(t *testing.T, data []byte, numExpected int) {
 			hfs = append(hfs, hf)
 		}
 	}
+}
+
+// Tests for dynamic table support
+
+func TestDynamicTableBasicOperations(t *testing.T) {
+	dt := newDynamicTable(1024)
+
+	// Insert an entry
+	dt.insert(HeaderField{Name: "foo", Value: "bar"})
+	require.Equal(t, uint64(1), dt.insertCount)
+
+	// Retrieve by relative index
+	hf, ok := dt.atRelative(0)
+	require.True(t, ok)
+	require.Equal(t, "foo", hf.Name)
+	require.Equal(t, "bar", hf.Value)
+
+	// Retrieve by absolute index
+	hf, ok = dt.atAbsolute(0)
+	require.True(t, ok)
+	require.Equal(t, "foo", hf.Name)
+
+	// Insert another entry
+	dt.insert(HeaderField{Name: "baz", Value: "qux"})
+	require.Equal(t, uint64(2), dt.insertCount)
+
+	// New entry is at relative 0, old is at relative 1
+	hf, ok = dt.atRelative(0)
+	require.True(t, ok)
+	require.Equal(t, "baz", hf.Name)
+
+	hf, ok = dt.atRelative(1)
+	require.True(t, ok)
+	require.Equal(t, "foo", hf.Name)
+}
+
+func TestDynamicTableCapacity(t *testing.T) {
+	// Small capacity that can only hold one entry
+	dt := newDynamicTable(64)
+
+	// First entry
+	dt.insert(HeaderField{Name: "a", Value: "b"})
+	require.Equal(t, 1, len(dt.entries))
+
+	// Second entry should evict first
+	dt.insert(HeaderField{Name: "c", Value: "d"})
+	require.Equal(t, 1, len(dt.entries))
+
+	hf, ok := dt.atRelative(0)
+	require.True(t, ok)
+	require.Equal(t, "c", hf.Name)
+}
+
+func TestProcessEncoderInstructions(t *testing.T) {
+	dec := NewDecoderWithCapacity(4096)
+
+	// Build an "Insert Without Name Reference" instruction
+	// 01 N xxxxx - name length, then name, then value length, then value
+	instruction := appendVarInt(nil, 5, 3) // name length 3
+	instruction[0] |= 0x40                 // set the instruction type bit
+	instruction = append(instruction, []byte("foo")...)
+	instruction = appendVarInt(instruction, 7, 3) // value length 3
+	instruction = append(instruction, []byte("bar")...)
+
+	err := dec.ProcessEncoderInstructions(instruction)
+	require.NoError(t, err)
+
+	// Check that the entry was added
+	require.Equal(t, uint64(1), dec.InsertCount())
+}
+
+func TestProcessEncoderInstructionsWithStaticNameRef(t *testing.T) {
+	dec := NewDecoderWithCapacity(4096)
+
+	// Build an "Insert With Name Reference (static)" instruction
+	// 11 xxxxxx - static table index, then value length, then value
+	// Use index 1 which is ":path"
+	instruction := appendVarInt(nil, 6, 1) // index 1
+	instruction[0] |= 0xc0                 // set bits for static name ref
+	instruction = appendVarInt(instruction, 7, 4)
+	instruction = append(instruction, []byte("/foo")...)
+
+	err := dec.ProcessEncoderInstructions(instruction)
+	require.NoError(t, err)
+
+	require.Equal(t, uint64(1), dec.InsertCount())
+}
+
+func TestSetDynamicTableCapacity(t *testing.T) {
+	dec := NewDecoderWithCapacity(4096)
+
+	// Build a "Set Dynamic Table Capacity" instruction
+	// 001 xxxxx - capacity
+	instruction := appendVarInt(nil, 5, 1024)
+	instruction[0] |= 0x20
+
+	err := dec.ProcessEncoderInstructions(instruction)
+	require.NoError(t, err)
+
+	// Trying to set capacity above max should fail
+	instruction = appendVarInt(nil, 5, 8192)
+	instruction[0] |= 0x20
+	err = dec.ProcessEncoderInstructions(instruction)
+	require.ErrorIs(t, err, errTableCapacityLimit)
 }
 
 func BenchmarkDecoder(b *testing.B) {

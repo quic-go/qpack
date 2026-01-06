@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"golang.org/x/net/http2/hpack"
 )
 
 // An invalidIndexError is returned when decoding encounters an invalid index
-// (e.g., an index that is out of bounds for the static or dynamic table).
+// (e.g., an index that is out of bounds for the static table).
 type invalidIndexError int
 
 func (e invalidIndexError) Error() string {
@@ -18,38 +19,39 @@ func (e invalidIndexError) Error() string {
 }
 
 var (
+	errNoDynamicTable     = errors.New("no dynamic table")
 	errInvalidTableIndex  = errors.New("invalid dynamic table index")
 	errTableCapacityLimit = errors.New("dynamic table capacity exceeded")
 )
 
-// dynamicTable represents the QPACK dynamic table.
+// DynamicTable represents the QPACK dynamic table.
 // It's a FIFO queue where new entries are added at the front (index 0)
 // and old entries are evicted from the back when capacity is exceeded.
-type dynamicTable struct {
+type DynamicTable struct {
 	entries     []HeaderField
 	size        uint64 // current size in bytes
 	capacity    uint64 // maximum capacity in bytes
 	insertCount uint64 // total number of entries ever inserted (for absolute indexing)
 }
 
-// newDynamicTable creates a new dynamic table with the given capacity.
-func newDynamicTable(capacity uint64) *dynamicTable {
-	return &dynamicTable{
+// NewDynamicTable creates a new dynamic table with the given capacity.
+func NewDynamicTable(capacity uint64) *DynamicTable {
+	return &DynamicTable{
 		entries:  make([]HeaderField, 0, 64),
 		capacity: capacity,
 	}
 }
 
-// setCapacity sets the maximum capacity of the dynamic table.
+// SetCapacity sets the maximum capacity of the dynamic table.
 // If the new capacity is smaller, entries are evicted.
-func (dt *dynamicTable) setCapacity(capacity uint64) {
+func (dt *DynamicTable) SetCapacity(capacity uint64) {
 	dt.capacity = capacity
 	dt.evict()
 }
 
-// insert adds a new entry to the dynamic table.
+// Insert adds a new entry to the dynamic table.
 // Returns the absolute index of the inserted entry.
-func (dt *dynamicTable) insert(hf HeaderField) uint64 {
+func (dt *DynamicTable) Insert(hf HeaderField) uint64 {
 	entrySize := headerFieldSize(hf)
 
 	// Evict entries if needed to make room
@@ -75,7 +77,7 @@ func (dt *dynamicTable) insert(hf HeaderField) uint64 {
 }
 
 // evict removes entries until size <= capacity
-func (dt *dynamicTable) evict() {
+func (dt *DynamicTable) evict() {
 	for dt.size > dt.capacity && len(dt.entries) > 0 {
 		last := dt.entries[len(dt.entries)-1]
 		dt.entries = dt.entries[:len(dt.entries)-1]
@@ -83,31 +85,41 @@ func (dt *dynamicTable) evict() {
 	}
 }
 
-// atRelative returns the entry at a relative index (0 = most recent).
-func (dt *dynamicTable) atRelative(relIndex uint64) (HeaderField, bool) {
+// AtRelative returns the entry at a relative index (0 = most recent).
+func (dt *DynamicTable) AtRelative(relIndex uint64) (HeaderField, bool) {
 	if relIndex >= uint64(len(dt.entries)) {
 		return HeaderField{}, false
 	}
 	return dt.entries[relIndex], true
 }
 
-// atAbsolute returns the entry at an absolute index.
+// AtAbsolute returns the entry at an absolute index.
 // Absolute index = insertCount at time of insertion.
-func (dt *dynamicTable) atAbsolute(absIndex uint64) (HeaderField, bool) {
+func (dt *DynamicTable) AtAbsolute(absIndex uint64) (HeaderField, bool) {
 	if absIndex >= dt.insertCount {
 		return HeaderField{}, false
 	}
 	// Convert absolute to relative
 	// relIndex = insertCount - 1 - absIndex
 	relIndex := dt.insertCount - 1 - absIndex
-	return dt.atRelative(relIndex)
+	return dt.AtRelative(relIndex)
 }
 
-// atPostBase returns the entry at a post-base index.
+// AtPostBase returns the entry at a post-base index.
 // Post-base indices are used for entries inserted after the base.
-func (dt *dynamicTable) atPostBase(base, postBaseIndex uint64) (HeaderField, bool) {
+func (dt *DynamicTable) AtPostBase(base, postBaseIndex uint64) (HeaderField, bool) {
 	absIndex := base + postBaseIndex
-	return dt.atAbsolute(absIndex)
+	return dt.AtAbsolute(absIndex)
+}
+
+// InsertCount returns the total number of entries ever inserted.
+func (dt *DynamicTable) InsertCount() uint64 {
+	return dt.insertCount
+}
+
+// Len returns the current number of entries in the table.
+func (dt *DynamicTable) Len() int {
+	return len(dt.entries)
 }
 
 // headerFieldSize returns the size of a header field as defined by QPACK.
@@ -120,11 +132,19 @@ func headerFieldSize(hf HeaderField) uint64 {
 // A Decoder can be reused to decode multiple header blocks on different streams
 // on the same connection (e.g., headers then trailers).
 type Decoder struct {
-	dynTable *dynamicTable
-	mu       sync.RWMutex
+	dynamicTable *DynamicTable
+	mu           sync.RWMutex
 
 	// maxTableCapacity is the maximum capacity we'll accept
 	maxTableCapacity uint64
+
+	// cond is used to signal when new entries are inserted into the dynamic table
+	// This allows the decoder to block until the required insert count is reached
+	cond *sync.Cond
+
+	// blockingTimeout is the maximum time to wait for encoder instructions
+	// Default is 5 seconds
+	blockingTimeout time.Duration
 }
 
 // DecodeFunc is a function that decodes the next header field from a header block.
@@ -133,20 +153,26 @@ type Decoder struct {
 // Any error other than io.EOF indicates a decoding error.
 type DecodeFunc func() (HeaderField, error)
 
-// NewDecoder returns a new Decoder with dynamic table support.
+// NewDecoder returns a new Decoder with a dynamic table.
 func NewDecoder() *Decoder {
-	return &Decoder{
-		dynTable:         newDynamicTable(0),
+	d := &Decoder{
+		dynamicTable:     NewDynamicTable(0),
 		maxTableCapacity: 65536, // Default max capacity
+		blockingTimeout:  5 * time.Second,
 	}
+	d.cond = sync.NewCond(&d.mu)
+	return d
 }
 
 // NewDecoderWithCapacity returns a new Decoder with the given max table capacity.
 func NewDecoderWithCapacity(maxCapacity uint64) *Decoder {
-	return &Decoder{
-		dynTable:         newDynamicTable(maxCapacity),
+	d := &Decoder{
+		dynamicTable:     NewDynamicTable(maxCapacity),
 		maxTableCapacity: maxCapacity,
+		blockingTimeout:  5 * time.Second,
 	}
+	d.cond = sync.NewCond(&d.mu)
+	return d
 }
 
 // SetDynamicTableCapacity processes a Set Dynamic Table Capacity instruction.
@@ -157,19 +183,59 @@ func (d *Decoder) SetDynamicTableCapacity(capacity uint64) error {
 	if capacity > d.maxTableCapacity {
 		return errTableCapacityLimit
 	}
-	d.dynTable.setCapacity(capacity)
+	d.dynamicTable.SetCapacity(capacity)
 	return nil
 }
 
-// InsertCount returns the current insert count of the dynamic table.
-func (d *Decoder) InsertCount() uint64 {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.dynTable.insertCount
+// InsertWithNameReference processes an Insert With Name Reference instruction.
+// The name comes from either the static or dynamic table.
+func (d *Decoder) InsertWithNameReference(isStatic bool, nameIndex uint64, value string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	var name string
+	if isStatic {
+		if nameIndex >= uint64(len(staticTableEntries)) {
+			return invalidIndexError(nameIndex)
+		}
+		name = staticTableEntries[nameIndex].Name
+	} else {
+		hf, ok := d.dynamicTable.AtRelative(nameIndex)
+		if !ok {
+			return errInvalidTableIndex
+		}
+		name = hf.Name
+	}
+
+	d.dynamicTable.Insert(HeaderField{Name: name, Value: value})
+	return nil
+}
+
+// InsertWithoutNameReference processes an Insert Without Name Reference instruction.
+func (d *Decoder) InsertWithoutNameReference(name, value string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.dynamicTable.Insert(HeaderField{Name: name, Value: value})
+	return nil
+}
+
+// Duplicate processes a Duplicate instruction.
+func (d *Decoder) Duplicate(relIndex uint64) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	hf, ok := d.dynamicTable.AtRelative(relIndex)
+	if !ok {
+		return errInvalidTableIndex
+	}
+	d.dynamicTable.Insert(hf)
+	return nil
 }
 
 // ProcessEncoderInstructions processes instructions from the encoder stream.
-// This should be called with data received on the QPACK encoder stream.
+// This should be called with data received on the encoder stream.
+// After processing, it broadcasts to wake any decoders waiting for entries.
 func (d *Decoder) ProcessEncoderInstructions(data []byte) error {
 	for len(data) > 0 {
 		b := data[0]
@@ -202,6 +268,9 @@ func (d *Decoder) ProcessEncoderInstructions(data []byte) error {
 			return err
 		}
 	}
+
+	// Broadcast to wake any decoders waiting for entries
+	d.cond.Broadcast()
 	return nil
 }
 
@@ -222,15 +291,9 @@ func (d *Decoder) processInsertWithStaticNameRef(buf []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	// Get name from static table
-	if nameIndex >= uint64(len(staticTableEntries)) {
-		return nil, invalidIndexError(nameIndex)
+	if err := d.InsertWithNameReference(true, nameIndex, value); err != nil {
+		return nil, err
 	}
-	name := staticTableEntries[nameIndex].Name
-
-	d.mu.Lock()
-	d.dynTable.insert(HeaderField{Name: name, Value: value})
-	d.mu.Unlock()
 	return rest, nil
 }
 
@@ -251,15 +314,9 @@ func (d *Decoder) processInsertWithDynamicNameRef(buf []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	// Get name from dynamic table
-	d.mu.Lock()
-	hf, ok := d.dynTable.atRelative(nameIndex)
-	if !ok {
-		d.mu.Unlock()
-		return nil, errInvalidTableIndex
+	if err := d.InsertWithNameReference(false, nameIndex, value); err != nil {
+		return nil, err
 	}
-	d.dynTable.insert(HeaderField{Name: hf.Name, Value: value})
-	d.mu.Unlock()
 	return rest, nil
 }
 
@@ -280,9 +337,9 @@ func (d *Decoder) processInsertWithoutNameRef(buf []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	d.mu.Lock()
-	d.dynTable.insert(HeaderField{Name: name, Value: value})
-	d.mu.Unlock()
+	if err := d.InsertWithoutNameReference(name, value); err != nil {
+		return nil, err
+	}
 	return rest, nil
 }
 
@@ -306,15 +363,17 @@ func (d *Decoder) processDuplicate(buf []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	d.mu.Lock()
-	hf, ok := d.dynTable.atRelative(relIndex)
-	if !ok {
-		d.mu.Unlock()
-		return nil, errInvalidTableIndex
+	if err := d.Duplicate(relIndex); err != nil {
+		return nil, err
 	}
-	d.dynTable.insert(hf)
-	d.mu.Unlock()
 	return rest, nil
+}
+
+// InsertCount returns the current insert count of the dynamic table.
+func (d *Decoder) InsertCount() uint64 {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.dynamicTable.InsertCount()
 }
 
 // Decode returns a function that decodes header fields from the given header block.
@@ -334,14 +393,15 @@ func (d *Decoder) Decode(p []byte) DecodeFunc {
 			p = rest
 			readRequiredInsertCount = true
 
-			// Decode Required Insert Count per RFC 9204 Section 4.5.1.1
+			// Decode Required Insert Count
+			// If encoded is 0, required insert count is 0
 			if encodedInsertCount == 0 {
 				requiredInsertCount = 0
 				base = 0
 			} else {
-				d.mu.RLock()
-				insertCount := d.dynTable.insertCount
-				d.mu.RUnlock()
+				// Decode per RFC 9204 Section 4.5.1.1
+				d.mu.Lock()
+				insertCount := d.dynamicTable.InsertCount()
 
 				maxEntries := d.maxTableCapacity / 32
 				if maxEntries == 0 {
@@ -349,6 +409,7 @@ func (d *Decoder) Decode(p []byte) DecodeFunc {
 				}
 				fullRange := 2 * maxEntries
 				if encodedInsertCount > fullRange {
+					d.mu.Unlock()
 					return HeaderField{}, errors.New("invalid encoded insert count")
 				}
 
@@ -359,16 +420,35 @@ func (d *Decoder) Decode(p []byte) DecodeFunc {
 				// Handle wrap-around
 				if requiredInsertCount > maxValue {
 					if requiredInsertCount <= fullRange {
+						d.mu.Unlock()
 						return HeaderField{}, errors.New("invalid required insert count")
 					}
 					requiredInsertCount -= fullRange
 				}
 
-				// Check if we have enough entries
-				if requiredInsertCount > insertCount {
-					return HeaderField{}, fmt.Errorf("required insert count %d exceeds current %d", requiredInsertCount, insertCount)
+				// Wait for encoder stream to provide required entries (RFC 9204 Section 2.1.2)
+				// Block until requiredInsertCount <= insertCount or timeout
+				deadline := time.Now().Add(d.blockingTimeout)
+				for requiredInsertCount > d.dynamicTable.InsertCount() {
+					if time.Now().After(deadline) {
+						currentCount := d.dynamicTable.InsertCount()
+						d.mu.Unlock()
+						return HeaderField{}, fmt.Errorf("timeout waiting for encoder stream: required insert count %d exceeds current %d", requiredInsertCount, currentCount)
+					}
+					// Wait for signal from ProcessEncoderInstructions
+					// Use a timed wait by spawning a goroutine that will broadcast after a short interval
+					done := make(chan struct{})
+					go func() {
+						time.Sleep(10 * time.Millisecond)
+						d.cond.Broadcast()
+						close(done)
+					}()
+					d.cond.Wait()
+					<-done
 				}
+				d.mu.Unlock()
 
+				// Set base for post-base references
 				base = requiredInsertCount
 			}
 		}
@@ -445,7 +525,7 @@ func (d *Decoder) parseIndexedHeaderField(buf []byte, base uint64) (_ HeaderFiel
 		// Dynamic table reference (relative to base)
 		d.mu.RLock()
 		absIndex := base - index - 1
-		hf, ok = d.dynTable.atAbsolute(absIndex)
+		hf, ok = d.dynamicTable.AtAbsolute(absIndex)
 		d.mu.RUnlock()
 	}
 
@@ -463,7 +543,7 @@ func (d *Decoder) parseIndexedFieldLinePostBase(buf []byte, base uint64) (_ Head
 	}
 
 	d.mu.RLock()
-	hf, ok := d.dynTable.atPostBase(base, index)
+	hf, ok := d.dynamicTable.AtPostBase(base, index)
 	d.mu.RUnlock()
 
 	if !ok {
@@ -489,7 +569,7 @@ func (d *Decoder) parseLiteralHeaderField(buf []byte, base uint64) (_ HeaderFiel
 		// Dynamic table reference
 		d.mu.RLock()
 		absIndex := base - index - 1
-		hf, ok = d.dynTable.atAbsolute(absIndex)
+		hf, ok = d.dynamicTable.AtAbsolute(absIndex)
 		d.mu.RUnlock()
 	}
 
@@ -518,7 +598,7 @@ func (d *Decoder) parseLiteralFieldLinePostBase(buf []byte, base uint64) (_ Head
 	}
 
 	d.mu.RLock()
-	hf, ok := d.dynTable.atPostBase(base, index)
+	hf, ok := d.dynamicTable.AtPostBase(base, index)
 	d.mu.RUnlock()
 
 	if !ok {
@@ -582,4 +662,9 @@ func (d *Decoder) atStatic(i uint64) (hf HeaderField, ok bool) {
 		return
 	}
 	return staticTableEntries[i], true
+}
+
+// at is for backwards compatibility - looks up in static table only
+func (d *Decoder) at(i uint64) (hf HeaderField, ok bool) {
+	return d.atStatic(i)
 }

@@ -28,4 +28,6 @@ jobs:
         uses: CodSpeedHQ/action@v4
         with:
           mode: walltime
+          # see https://github.com/CodSpeedHQ/codspeed-go/releases
+          go-runner-version: "1.0.2"
           run: go test -run=^$ -bench=. ./...

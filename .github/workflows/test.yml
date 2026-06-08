@@ -24,7 +24,7 @@ jobs:
         run: go test -shuffle=on -v ./interop
       - name: Upload coverage to Codecov
         if: ${{ !cancelled() }}
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         env:
           GO: ${{ matrix.go }}
         with:

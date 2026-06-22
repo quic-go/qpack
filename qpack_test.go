@@ -41,15 +41,11 @@ func TestEncodeDecode(t *testing.T) {
 // replace one character by a random character at a random position
 func replaceRandomCharacter(s string) string {
 	pos := rand.IntN(len(s))
-	new := s[:pos]
 	for {
-		if c := randomString(1); c != string(s[pos]) {
-			new += c
-			break
+		if c := randomString(1); c != s[pos:pos+1] {
+			return s[:pos] + c + s[pos+1:]
 		}
 	}
-	new += s[pos+1:]
-	return new
 }
 
 func check(t *testing.T, encoded []byte, hf HeaderField) {
